@@ -1,0 +1,87 @@
+{
+  "expo": {
+    "name": "Simple Lecture",
+    "slug": "edulearn-mobile",
+    "version": "1.0.0",
+    "scheme": "com.edulearn.mobile",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/adaptive-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.edulearn.mobile",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "remote-notification"
+        ],
+        "LSApplicationQueriesSchemes": [
+          "tez",
+          "phonepe",
+          "paytm",
+          "gpay",
+          "bhim",
+          "upi"
+        ],
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": [
+              "com.edulearn.mobile"
+            ],
+            "CFBundleURLName": "com.edulearn.mobile"
+          }
+        ]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#F5F5F5"
+      },
+      "package": "com.edulearn.mobile",
+      "googleServicesFile": "./google-services.json",
+      "versionCode": 6,
+      "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#2BBD6E",
+          "sounds": []
+        }
+      ],
+      "./plugins/withFirebaseMessagingFix",
+      "./plugins/withAdiRegistration",
+      "./plugins/withTargetSdk",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Simple Lecture to access your photos to upload answer images.",
+          "cameraPermission": "Allow Simple Lecture to use your camera to capture answer images."
+        }
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "9c1ebb82-345b-4b63-aecf-bcec57b9be19"
+      }
+    },
+    "owner": "prashantuser4s-team"
+  }
+}
