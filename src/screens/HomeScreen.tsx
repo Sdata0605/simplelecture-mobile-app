@@ -23,6 +23,7 @@ import { useAuth } from '../context/AuthContext';
 import { useSidebar } from '../context/SidebarContext';
 import HeaderMenuButton from '../components/HeaderMenuButton';
 import HomeHeroBanner from '../components/HomeHeroBanner';
+import HeroVideoBanner from '../components/HeroVideoBanner';
 import { useCourseFreePreviewLimits } from '../hooks/useCourseFreeAccess';
 
 const SSLC_COURSE_ID = '4c10bc8e-acbc-4b76-b7f5-54376c030cb0';
@@ -243,6 +244,8 @@ export default function HomeScreen() {
                 })
               }
             />
+
+            <HeroVideoBanner />
 
             {enrolledCourses.length > 0 && (
               <View style={styles.section}>
