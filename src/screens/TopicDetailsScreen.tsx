@@ -24,6 +24,7 @@ import {
   PanResponderGestureState,
 } from 'react-native';
 import { filterLecturesByVisibility, getTopicLectureVisibility } from '../services/aiLectureService';
+import { NotesBookReader } from '../components/learning/notes/NotesBookReader';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { Audio } from 'expo-av';
@@ -173,6 +174,7 @@ type SolutionQuestion = {
 const TABS = [
   { id: 'videos', label: 'Classes', icon: 'play-circle-outline' },
   { id: 'ai', label: 'AI', icon: 'sparkles-outline' },
+  { id: 'notes', label: 'Notes', icon: 'document-text-outline' },
   { id: 'questions', label: 'Questions', icon: 'list-outline' },
   { id: 'solutions', label: 'Solutions', icon: 'bulb-outline' },
   { id: 'assignments', label: 'Assignments', icon: 'clipboard-outline' },
@@ -5420,27 +5422,12 @@ export default function TopicDetailsScreen() {
   };
 
   const renderNotesTab = () => (
-    <View style={styles.tabContent}>
-      <View style={styles.notesCard}>
-        <Text style={styles.notesTitle}>{NOTES_DATA.title}</Text>
-        {NOTES_DATA.content.map((section, idx) => (
-          <View key={idx} style={styles.notesSection}>
-            <Text style={styles.notesHeading}>{section.heading}</Text>
-            <Text style={styles.notesText}>{section.text}</Text>
-          </View>
-        ))}
-        <View style={styles.notesButtons}>
-          <TouchableOpacity style={styles.notesButton}>
-            <Ionicons name="download-outline" size={18} color={colors.primary} />
-            <Text style={styles.notesButtonText}>Download PDF</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.notesButton}>
-            <Ionicons name="print-outline" size={18} color={colors.primary} />
-            <Text style={styles.notesButtonText}>Print</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </View>
+    <NotesBookReader
+      topicId={topicId}
+      chapterId={routeChapterId}
+      subjectId={subjectId}
+      topicTitle={topicTitle || topic?.title}
+    />
   );
 
   const renderAssignmentsTab = () => {
@@ -7826,6 +7813,7 @@ export default function TopicDetailsScreen() {
     switch (activeTab) {
       case 'videos': return renderVideosTab();
       case 'ai': return renderAiTab();
+      case 'notes': return renderNotesTab();
       case 'questions': return renderQuestionsTab();
       case 'solutions': return renderSolutionsTab();
       case 'dpp': return renderDppTab();
