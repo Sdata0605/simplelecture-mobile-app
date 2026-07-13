@@ -123,6 +123,7 @@ export default function V4PlayerScreen() {
   const [error, setError] = useState<string | null>(null);
   const [presentation, setPresentation] = useState<V4Presentation | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState<PlayerLanguage>('english');
+  const [languageUnavailable, setLanguageUnavailable] = useState(false);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -298,9 +299,20 @@ export default function V4PlayerScreen() {
     const avatarRaw = resolveAvatarPath(sec, selectedLanguage);
     const avatarRemote = avatarRaw ? toRemote(avatarRaw, 'avatar') : null;
 
+    // Top-level language MP4 (vimeo_mp4_url / kannada_vimeo_mp4_url) is the
+    // primary native video source when the presentation carries one.
+    // English → presentation.vimeo_mp4_url
+    // Kannada → presentation.kannada_vimeo_mp4_url
+    const topLevelUrl = resolvePlaybackUrl(pres, selectedLanguage);
+
     let primary: string;
     let fallback: string;
-    if (useFinal) {
+    if (topLevelUrl) {
+      // Derived from the top-level language MP4 — this IS the native player source.
+      primary = toRemote(topLevelUrl, 'video');
+      // Avatar clip is the fallback if the top-level URL cannot be played.
+      fallback = avatarRemote ?? primary;
+    } else if (useFinal) {
       primary = toRemote(resolveFinalVideoPath(sec), 'video');
       // A missing / undecodable final degrades to the avatar clip.
       fallback = avatarRemote ?? primary;
@@ -758,7 +770,7 @@ export default function V4PlayerScreen() {
         )}
       </View>
 
-      {/* Language selector — only shown when the presentation has a Kannada version */}
+      {/* Language selector — only shown when the presentation carries a Kannada top-level URL */}
       {presentation?.kannada_vimeo_mp4_url && (
         <View style={styles.langSelectorRow}>
           {(['english', 'kannada'] as PlayerLanguage[]).map(lang => (
@@ -767,8 +779,18 @@ export default function V4PlayerScreen() {
               style={[styles.langSelectorBtn, selectedLanguage === lang && styles.langSelectorBtnActive]}
               onPress={() => {
                 if (lang === selectedLanguage) return;
+                // Resolve the top-level URL for this language before switching.
+                // English: presentation.vimeo_mp4_url
+                // Kannada: presentation.kannada_vimeo_mp4_url
+                const targetUrl = resolvePlaybackUrl(presentation!, lang);
+                if (lang !== 'english' && !targetUrl) {
+                  setLanguageUnavailable(true);
+                  return;
+                }
+                setLanguageUnavailable(false);
                 setSelectedLanguage(lang);
-                // Reload the current section with the new language
+                // loadSection re-runs with the new language; the native video
+                // source (primary) will now be derived from targetUrl.
                 loadSection(currentIndexRef.current, isPlayingRef.current);
               }}
             >
@@ -777,6 +799,9 @@ export default function V4PlayerScreen() {
               </Text>
             </TouchableOpacity>
           ))}
+          {languageUnavailable && (
+            <Text style={styles.langUnavailableText}>Language unavailable</Text>
+          )}
         </View>
       )}
 
@@ -884,6 +909,12 @@ const styles = StyleSheet.create({
   },
   langSelectorTextActive: {
     color: C.gold,
+  },
+  langUnavailableText: {
+    color: '#f87171',
+    fontSize: 10,
+    marginLeft: 4,
+    alignSelf: 'center',
   },
   // Fullscreen
   screenFS: {

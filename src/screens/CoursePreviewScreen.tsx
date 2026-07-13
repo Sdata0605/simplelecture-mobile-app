@@ -132,60 +132,30 @@ function ClassesTabContent({ topicId, chapterId, topicVideoId, topicVideoPlatfor
     return () => { cancelled = true; };
   }, [topicId, courseId, chapterId]);
 
-  const handleWatchAILecture = useCallback(async (lec: AiLecturePreviewItem) => {
+  const handleWatchAILecture = useCallback((lec: AiLecturePreviewItem) => {
     // Gate: only free chapters are playable on the preview screen
     if (!isChapterFree) {
       onBuy();
       return;
     }
-    setLoadingLectureId(lec.id);
-    try {
-      const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/video_generation_jobs?select=id,document_name,external_job_id,presentation_json,video_url&id=eq.${lec.id}`,
-        { headers: REST_HEADERS }
-      );
-      const data = res.ok ? await res.json().catch(() => []) : [];
-      const full = Array.isArray(data) && data.length ? data[0] : null;
-      if (full) {
-        // V4 player: use when an external_job_id exists (new AI-generated presentations)
-        if (full.external_job_id) {
-          (navigation.navigate as any)('V4Player', {
-            jobId: full.external_job_id,
-            topicId, chapterId, courseId,
-            topicTitle: full.document_name || topicTitle,
-          });
-          return;
-        }
-        // Legacy path: navigate to the section-by-section AI player
-        (navigation.navigate as any)('AILecturePlayer', {
-          jobId: full.id,
-          topicTitle: full.document_name || topicTitle,
-          presentationJson: full.presentation_json || undefined,
-          videoUrl: full.video_url || undefined,
-          topicId, courseId, initialLanguage: 'english',
-        });
-        return;
-      }
-    } catch { } finally { setLoadingLectureId(null); }
-    // Fallback: use the top-level external_job_id if already available
+    // V4 is the only supported player. external_job_id is the required identifier.
     if (lec.external_job_id) {
       (navigation.navigate as any)('V4Player', {
         jobId: lec.external_job_id,
-        topicId, chapterId, courseId,
+        topicId,
+        chapterId,
+        courseId,
         topicTitle: lec.document_name || topicTitle,
+        isPreview: true,
       });
       return;
     }
-    if (lec.video_url) {
-      const base = lec.video_url.substring(0, lec.video_url.lastIndexOf('/') + 1);
-      const presentationUrl = lec.video_url.endsWith('.json') ? lec.video_url : base + 'presentation.json';
-      (navigation.navigate as any)('AILecturePlayer', {
-        jobId: lec.id,
-        topicTitle: lec.document_name || topicTitle,
-        presentationUrl, videoUrl: lec.video_url,
-        topicId, courseId, initialLanguage: 'english',
-      });
-    }
+    // No external_job_id — lecture not yet available in V4.
+    Alert.alert(
+      'Content Unavailable',
+      'This lecture is not available in the new player yet.',
+      [{ text: 'OK' }],
+    );
   }, [topicId, chapterId, courseId, topicTitle, navigation, isChapterFree, onBuy]);
 
   const openVideo = useCallback((platform: string, videoId: string) => {
