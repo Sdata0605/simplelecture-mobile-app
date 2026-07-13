@@ -22,6 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, spacing, fontSize, borderRadius } from '../constants/theme';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../services/supabase';
+import { getFreePreviewChapterIds, getTopicLectureVisibility, filterLecturesByVisibility } from '../services/aiLectureService';
 import { useCourseFreeAccess, useCourseFreePreviewLimits } from '../hooks/useCourseFreeAccess';
 import { getQuotaCount, incrementQuota } from '../utils/previewQuota';
 import { RootStackParamList } from '../navigation/AppNavigator';
@@ -37,41 +38,7 @@ const REST_HEADERS = {
   'Content-Type': 'application/json',
 };
 
-// ── Free-preview & visibility helpers ─────────────────────────────────────────
-
-async function getFreePreviewChapterIds(courseId: string): Promise<string[]> {
-  try {
-    const url = `${SUPABASE_URL}/rest/v1/course_free_access_chapters?select=chapter_id&course_id=eq.${courseId}`;
-    const resp = await fetch(url, {
-      headers: { Accept: 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-    });
-    if (!resp.ok) return [];
-    const data = await resp.json();
-    return data.map((row: { chapter_id: string }) => row.chapter_id);
-  } catch {
-    return [];
-  }
-}
-
-async function getLectureVisibilityMode(topicId: string): Promise<string> {
-  try {
-    const url = `${SUPABASE_URL}/rest/v1/topic_lecture_visibility?select=mode&topic_id=eq.${topicId}`;
-    const resp = await fetch(url, {
-      headers: { Accept: 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-    });
-    if (!resp.ok) return 'both';
-    const data = await resp.json();
-    return data?.[0]?.mode || 'both';
-  } catch {
-    return 'both';
-  }
-}
-
-function filterLecturesByVisibility(lectures: AiLecturePreviewItem[], mode: string): AiLecturePreviewItem[] {
-  if (mode === 'hide_marketing') return lectures.filter(l => !l.is_marketing);
-  if (mode === 'hide_lecture') return lectures.filter(l => l.is_marketing);
-  return lectures; // 'both' or default
-}
+// Free-preview & visibility helpers come from the shared aiLectureService.
 
 const PREVIEW_TABS = ['Classes', 'AI', 'Questions', 'Assignments', 'DPP', 'Results', 'Doubts', "PYQ's"] as const;
 type PreviewTab = typeof PREVIEW_TABS[number];
@@ -145,7 +112,7 @@ function ClassesTabContent({ topicId, chapterId, topicVideoId, topicVideoPlatfor
       fetch(videosUrl, { headers: REST_HEADERS }),
       fetch(aiUrl, { headers: REST_HEADERS }),
       getFreePreviewChapterIds(courseId),
-      getLectureVisibilityMode(topicId),
+      getTopicLectureVisibility(topicId),
     ])
       .then(async ([vRes, aRes, freeIds, visMode]) => {
         console.log('[Preview][Classes] topic_videos status:', vRes.status, '| ai_lectures status:', aRes.status);

@@ -138,6 +138,7 @@ export type RootStackParamList = {
     subjectId?: string;
     courseId?: string;
     topicTitle?: string;
+    isPreview?: boolean;
   };
   MyRewards: undefined;
   CoursePreview: { courseId: string; courseName: string; courseSlug: string };

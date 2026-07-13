@@ -23,8 +23,7 @@ import {
   GestureResponderEvent,
   PanResponderGestureState,
 } from 'react-native';
-import { extractJobIdFromUrl } from '../utils/mediaResolver';
-import { shouldUseV4Player } from '../lib/playerSelection';
+import { filterLecturesByVisibility, getTopicLectureVisibility } from '../services/aiLectureService';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { Audio } from 'expo-av';
@@ -2325,13 +2324,19 @@ export default function TopicDetailsScreen() {
     setTopicLoading(false);
   };
 
+  const [topicVisibilityMode, setTopicVisibilityMode] = useState<string | null>(null);
+
   const fetchTopicVideos = async () => {
     if (!topicId) return;
     setVideosLoading(true);
     setVideosError(null);
     console.log('[TopicDetails] Fetching videos for topicId:', topicId);
-    const result = await supabase.getTopicVideos(topicId);
-    console.log('[TopicDetails] Video fetch success:', result.success, 'count:', result.videos?.length || 0);
+    const [result, visMode] = await Promise.all([
+      supabase.getTopicVideos(topicId),
+      getTopicLectureVisibility(topicId),
+    ]);
+    setTopicVisibilityMode(visMode);
+    console.log('[TopicDetails] Video fetch success:', result.success, 'count:', result.videos?.length || 0, 'visMode:', visMode);
     if (result.success && result.videos) {
       console.log('[TopicDetails] Videos found:', result.videos.length);
       setTopicVideos(result.videos);
@@ -3018,8 +3023,19 @@ export default function TopicDetailsScreen() {
       );
     }
 
+    // Apply topic_lecture_visibility to AI lectures; keep non-AI videos unchanged
+    const aiFiltered = filterLecturesByVisibility(
+      topicVideos.filter(v => v.video_platform === 'ai_generated'),
+      topicVisibilityMode,
+    );
+    const aiFilteredIds = new Set(aiFiltered.map((v: any) => v.id));
+
     // Filter: include videos with video_id OR video_url (for AI-generated)
-    const allActiveVideos = topicVideos.filter(v => v.is_active && (v.video_id || v.video_url));
+    const allActiveVideos = topicVideos.filter(v => {
+      if (!v.is_active) return false;
+      if (v.video_platform === 'ai_generated') return aiFilteredIds.has(v.id);
+      return !!(v.video_id || v.video_url);
+    });
     
     // Get unique languages from videos
     const availableLanguages = ['all', ...Array.from(new Set(
@@ -3063,64 +3079,37 @@ export default function TopicDetailsScreen() {
       return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    // Handle video click - use video_url for AI videos, video_id for others
+    // Handle video click — V4 player for all AI lectures with external_job_id
     const handleVideoPress = (video: TopicVideo) => {
       if (video.video_platform === 'ai_generated') {
-        // For AI-generated videos, navigate to the AI Lecture Player
-        // Priority 1: Use ai_presentation_json if available (from database)
-        // Priority 2: Use video_url to extract jobId and/or construct presentation URL
-        // Extract jobId from video_url if available
-        const extractedJobId = extractJobIdFromUrl(video.video_url);
-        console.log('[TopicDetails] Extracted jobId:', extractedJobId, 'from URL:', video.video_url);
-
-        // D.Pharmacy course uses the new self-contained V4 player.
-        if (shouldUseV4Player(languageCourseId) && extractedJobId) {
-          console.log('[TopicDetails] Routing to V4 player for D.Pharmacy course');
+        // V4 path: use external_job_id (the stable V4 identifier).
+        // No course-ID gate — V4 is open to all courses.
+        const jobId = video.external_job_id;
+        if (jobId) {
+          console.log('[TopicDetails] Routing to V4 player, jobId:', jobId);
           navigation.navigate('V4Player', {
-            jobId: extractedJobId,
+            jobId,
             topicId: topicId || undefined,
             chapterId: routeChapterId || topic?.chapter_id || undefined,
             subjectId: subjectId || undefined,
             courseId: languageCourseId || undefined,
             topicTitle: video.title || topic?.title || 'AI Lecture',
+            isPreview: false,
           });
           return;
         }
 
-        if (video.ai_presentation_json) {
-          // Use presentation JSON directly from database (optimal path)
-          console.log('[TopicDetails] Using ai_presentation_json from database');
-          navigation.navigate('AILecturePlayer', {
-            presentationJson: video.ai_presentation_json,
-            videoUrl: video.video_url || undefined,
-            jobId: extractedJobId || undefined,
-            topicTitle: video.title || topic?.title || 'AI Lecture',
-            initialLanguage: selectedAILanguage || 'english',
-            topicId: topicId || undefined,
-            chapterId: routeChapterId || topic?.chapter_id || undefined,
-            subjectId: subjectId || undefined,
-            courseId: languageCourseId || undefined,
-          });
-        } else if (video.video_url) {
-          console.log('[TopicDetails] Using video_url for AI lecture');
-          let presentationUrl = video.video_url;
-          if (!video.video_url.endsWith('.json')) {
-            const baseUrl = video.video_url.substring(0, video.video_url.lastIndexOf('/') + 1);
-            presentationUrl = baseUrl + 'presentation.json';
-          }
-          navigation.navigate('AILecturePlayer', {
-            presentationUrl: presentationUrl,
-            videoUrl: video.video_url,
-            jobId: extractedJobId || undefined,
-            topicTitle: video.title || topic?.title || 'AI Lecture',
-            initialLanguage: selectedAILanguage || 'english',
-            topicId: topicId || undefined,
-            chapterId: routeChapterId || topic?.chapter_id || undefined,
-            subjectId: subjectId || undefined,
-            courseId: languageCourseId || undefined,
-          });
-        }
-      } else if (video.video_id) {
+        // No external_job_id — content is not available via V4
+        console.warn('[TopicDetails] AI lecture has no external_job_id — content unavailable');
+        Alert.alert(
+          'Content Unavailable',
+          'This AI lecture is not yet available. Please try again later.',
+          [{ text: 'OK' }],
+        );
+        return;
+      }
+
+      if (video.video_id) {
         setSelectedVideo(video.video_id);
       }
     };

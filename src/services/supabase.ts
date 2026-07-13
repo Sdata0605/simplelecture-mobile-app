@@ -217,6 +217,8 @@ export interface TopicVideo {
   id: string;
   topic_id: string;
   video_id: string | null;
+  /** Stable V4 player identifier sourced from video_generation_jobs.external_job_id */
+  external_job_id?: string | null;
   title: string | null;
   description: string | null;
   duration_seconds: number | null;
@@ -226,9 +228,10 @@ export interface TopicVideo {
   video_platform: string | null;
   is_active: boolean;
   created_at: string;
-  video_url?: string | null; // For AI-generated videos
+  video_url?: string | null; // Kept for legacy fallback only — do not use for playback
   ai_presentation_json?: any; // Complete presentation data from database
   available_languages?: string[]; // Available language versions for this lecture
+  is_marketing?: boolean | null; // Used for topic_lecture_visibility filtering
 }
 
 export interface CounselorAvatar {
@@ -1769,7 +1772,7 @@ class SupabaseService {
         ),
         // 3. Fetch published AI lectures from video_generation_jobs (HIGHEST PRIORITY)
         fetch(
-          `${SUPABASE_URL}/rest/v1/video_generation_jobs?select=id,document_name,external_job_id,presentation_json,video_url,created_at,ai_assistant_documents!inner(topic_id,chapter_id)&is_published=eq.true&status=eq.completed&ai_assistant_documents.topic_id=eq.${topicId}&order=created_at.desc`,
+          `${SUPABASE_URL}/rest/v1/video_generation_jobs?select=id,document_name,external_job_id,presentation_json,video_url,is_marketing,created_at,ai_assistant_documents!inner(topic_id,chapter_id)&is_published=eq.true&status=eq.completed&ai_assistant_documents.topic_id=eq.${topicId}&order=created_at.desc`,
           {
             method: 'GET',
             headers: {
@@ -1800,6 +1803,7 @@ class SupabaseService {
             id: `published-${lecture.id}`,
             topic_id: topicId,
             video_id: lecture.external_job_id || lecture.id,
+            external_job_id: lecture.external_job_id || null,
             title: lecture.document_name || 'AI Lecture',
             description: 'AI-generated video lecture with native player',
             duration_seconds: null,
@@ -1812,6 +1816,7 @@ class SupabaseService {
             video_url: lecture.video_url,
             ai_presentation_json: lecture.presentation_json,
             available_languages: ['english'],
+            is_marketing: lecture.is_marketing ?? null,
           });
         });
       }

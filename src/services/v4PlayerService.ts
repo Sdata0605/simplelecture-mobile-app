@@ -124,15 +124,34 @@ export interface V4Section {
   content?: string;
 }
 
+export type PlayerLanguage = 'english' | 'kannada';
+
 export interface V4Presentation {
   presentation_title: string;
   job_id?: string;
   sections: V4Section[];
   base_url?: string;
+  /** Top-level full-lecture merged MP4 (English) */
+  vimeo_mp4_url?: string;
+  /** Top-level full-lecture merged MP4 (Kannada) */
+  kannada_vimeo_mp4_url?: string;
+  final_video_path?: string;
+  kannada_final_video?: string;
+}
+
+/** Resolve the top-level full-lecture MP4 URL for the chosen language. */
+export function resolvePlaybackUrl(
+  presentation: V4Presentation,
+  language: PlayerLanguage,
+): string | null {
+  if (language === 'kannada') {
+    return presentation.kannada_vimeo_mp4_url || null;
+  }
+  return presentation.vimeo_mp4_url || null;
 }
 
 // ---------------------------------------------------------------------------
-// URL helpers — all media resolved through the v3-player-proxy edge function
+// URL helpers — all media resolved through the v4-player-proxy edge function
 // ---------------------------------------------------------------------------
 
 export function resolveV4MediaUrl(jobId: string, path: string): string {
@@ -387,11 +406,18 @@ export function resolveFinalVideoPath(section: V4Section): string {
   return `videos/section_${section.section_id}_final.mp4`;
 }
 
-export function resolveAvatarPath(section: V4Section): string | null {
-  // Priority 1: b2_url (direct Backblaze B2 URL — always absolute)
+export function resolveAvatarPath(section: V4Section, language: PlayerLanguage = 'english'): string | null {
+  // Priority 1: b2_url (direct Backblaze B2 URL — always absolute, language-agnostic)
   if (section.b2_url) return section.b2_url;
-  // Priority 2: completed language-specific avatar
+  // Priority 2: language-specific avatar from avatar_languages
   if (section.avatar_languages?.length) {
+    if (language !== 'english') {
+      const langMatch = section.avatar_languages.find(
+        al => al.language.toLowerCase() === language && al.status === 'completed' && al.video_path,
+      );
+      if (langMatch) return langMatch.video_path;
+    }
+    // Fall back to first completed (usually English)
     const completed = section.avatar_languages.find(al => al.status === 'completed' && al.video_path);
     if (completed) return completed.video_path;
   }

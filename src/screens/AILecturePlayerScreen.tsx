@@ -2015,7 +2015,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     const avatarLayerStyle = isFullscreen ? styles.avatarLayer : styles.portraitAvatarLayer;
     
     const currentSectionAvatarPath = currentSection ? getAvatarPathForSection(currentSection, selectedLanguage) : null;
-    if (!currentSectionAvatarPath) {
+    if (!currentSectionAvatarPath || !currentSection) {
       if (!useTimerFallback) setUseTimerFallback(true);
       return <View style={avatarLayerStyle} />;
     }

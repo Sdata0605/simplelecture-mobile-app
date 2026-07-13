@@ -13,7 +13,7 @@ import { RootStackParamList } from '../navigation/AppNavigator';
 import {
   fetchV4Presentation, V4PreloadManager, V4Presentation,
   resolveV4MediaUrl, getCachedUrl, resolveFinalVideoPath, resolveAvatarPath, PreloadProgress,
-  sectionHasInfographicImage,
+  sectionHasInfographicImage, PlayerLanguage, resolvePlaybackUrl,
 } from '../services/v4PlayerService';
 import { V4Avatar, V4AvatarRef } from '../components/v4/V4Avatar';
 import { V4MergedVideo, V4MergedVideoRef } from '../components/v4/V4MergedVideo';
@@ -122,6 +122,7 @@ export default function V4PlayerScreen() {
   const [preloadProgress, setPreloadProgress] = useState<PreloadProgress>({ completed: 0, total: 0, percent: 0 });
   const [error, setError] = useState<string | null>(null);
   const [presentation, setPresentation] = useState<V4Presentation | null>(null);
+  const [selectedLanguage, setSelectedLanguage] = useState<PlayerLanguage>('english');
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -294,7 +295,7 @@ export default function V4PlayerScreen() {
     const toRemote = (path: string, mediaType: 'avatar' | 'video') =>
       path.startsWith('http') ? path : resolveV4MediaUrl(jobId, normalizePath(path, mediaType));
 
-    const avatarRaw = resolveAvatarPath(sec);
+    const avatarRaw = resolveAvatarPath(sec, selectedLanguage);
     const avatarRemote = avatarRaw ? toRemote(avatarRaw, 'avatar') : null;
 
     let primary: string;
@@ -308,7 +309,7 @@ export default function V4PlayerScreen() {
       fallback = primary;
     }
 
-    console.log(`[V4Source] sec=${idx} kind=${kind} PRIMARY=${primary} FALLBACK=${fallback}`);
+    console.log(`[V4Source] sec=${idx} kind=${kind} lang=${selectedLanguage} PRIMARY=${primary} FALLBACK=${fallback}`);
     currentVideoUrlRef.current = primary;
     currentFallbackUrlRef.current = fallback;
     currentTimeRef.current = 0;
@@ -317,8 +318,6 @@ export default function V4PlayerScreen() {
     avatarRef.current?.loadSection(primary, playbackRateRef.current, cbs, fallback, { noChroma: true });
 
     // Pre-buffer the next non-quiz section into the WebView standby buffer.
-    // Skip when the current section has a quiz: the per-question quiz clips reuse
-    // the same WebView and would discard a prefetched standby buffer anyway.
     const currentHasQuiz =
       (Array.isArray(sec.questions) && sec.questions.length > 0) ||
       (Array.isArray(sec.understanding_quiz) && sec.understanding_quiz.length > 0);
@@ -330,17 +329,14 @@ export default function V4PlayerScreen() {
       if (nUseFinal) {
         nUrl = toRemote(resolveFinalVideoPath(nextSec), 'video');
       } else {
-        const nAv = resolveAvatarPath(nextSec);
+        const nAv = resolveAvatarPath(nextSec, selectedLanguage);
         nUrl = nAv ? toRemote(nAv, 'avatar') : null;
       }
       if (nUrl) avatarRef.current?.prefetch(nUrl);
     }
 
-    // The next section is pre-buffered to disk by the preload manager below — a
-    // single-surface player can't hold a second live decoder, so we rely on the
-    // on-disk cache (file://) for a fast source swap.
     preloadManagerRef.current?.prefetchAhead(idx);
-  }, [jobId, reportWatchTime]);
+  }, [jobId, reportWatchTime, selectedLanguage]);
 
   const handleAvatarEnded = useCallback(() => {
     if (showQuizRef.current) return;
@@ -762,6 +758,28 @@ export default function V4PlayerScreen() {
         )}
       </View>
 
+      {/* Language selector — only shown when the presentation has a Kannada version */}
+      {presentation?.kannada_vimeo_mp4_url && (
+        <View style={styles.langSelectorRow}>
+          {(['english', 'kannada'] as PlayerLanguage[]).map(lang => (
+            <TouchableOpacity
+              key={lang}
+              style={[styles.langSelectorBtn, selectedLanguage === lang && styles.langSelectorBtnActive]}
+              onPress={() => {
+                if (lang === selectedLanguage) return;
+                setSelectedLanguage(lang);
+                // Reload the current section with the new language
+                loadSection(currentIndexRef.current, isPlayingRef.current);
+              }}
+            >
+              <Text style={[styles.langSelectorText, selectedLanguage === lang && styles.langSelectorTextActive]}>
+                {lang === 'english' ? 'EN' : 'ಕನ್ನಡ'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
       {/* Controls + remaining area */}
       <View style={styles.belowStage}>
         <V4ControlsBottom
@@ -838,6 +856,34 @@ const styles = StyleSheet.create({
   belowStage: {
     flex: 1,
     backgroundColor: C.bg,
+  },
+  langSelectorRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    gap: 6,
+    backgroundColor: C.bg,
+  },
+  langSelectorBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#444',
+  },
+  langSelectorBtnActive: {
+    borderColor: C.gold,
+    backgroundColor: 'rgba(255,198,41,0.12)',
+  },
+  langSelectorText: {
+    color: '#888',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  langSelectorTextActive: {
+    color: C.gold,
   },
   // Fullscreen
   screenFS: {
