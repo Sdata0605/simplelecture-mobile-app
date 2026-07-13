@@ -6,5 +6,5 @@
 export const DPHARMACY_COURSE_ID = 'e74e8e53-5949-4113-a565-1e84c2b4ee0e';
 
 export function shouldUseV4Player(courseId?: string | null): boolean {
-  return courseId === DPHARMACY_COURSE_ID;
+  return true; // V4 is now enabled for all courses
 }

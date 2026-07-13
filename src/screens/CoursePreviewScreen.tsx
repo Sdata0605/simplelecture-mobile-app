@@ -37,6 +37,42 @@ const REST_HEADERS = {
   'Content-Type': 'application/json',
 };
 
+// ── Free-preview & visibility helpers ─────────────────────────────────────────
+
+async function getFreePreviewChapterIds(courseId: string): Promise<string[]> {
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/course_free_access_chapters?select=chapter_id&course_id=eq.${courseId}`;
+    const resp = await fetch(url, {
+      headers: { Accept: 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return data.map((row: { chapter_id: string }) => row.chapter_id);
+  } catch {
+    return [];
+  }
+}
+
+async function getLectureVisibilityMode(topicId: string): Promise<string> {
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/topic_lecture_visibility?select=mode&topic_id=eq.${topicId}`;
+    const resp = await fetch(url, {
+      headers: { Accept: 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+    });
+    if (!resp.ok) return 'both';
+    const data = await resp.json();
+    return data?.[0]?.mode || 'both';
+  } catch {
+    return 'both';
+  }
+}
+
+function filterLecturesByVisibility(lectures: AiLecturePreviewItem[], mode: string): AiLecturePreviewItem[] {
+  if (mode === 'hide_marketing') return lectures.filter(l => !l.is_marketing);
+  if (mode === 'hide_lecture') return lectures.filter(l => l.is_marketing);
+  return lectures; // 'both' or default
+}
+
 const PREVIEW_TABS = ['Classes', 'AI', 'Questions', 'Assignments', 'DPP', 'Results', 'Doubts', "PYQ's"] as const;
 type PreviewTab = typeof PREVIEW_TABS[number];
 
@@ -49,7 +85,7 @@ interface Topic {
 }
 interface Chapter { id: string; title: string; chapter_number: number; topics: Topic[] }
 interface TopicVideoItem { id: string; video_name: string | null; language: string; video_platform: string; video_id: string; description: string | null; display_order: number; is_active: boolean }
-interface AiLecturePreviewItem { id: string; document_name: string | null; external_job_id: string | null; video_url: string | null }
+interface AiLecturePreviewItem { id: string; document_name: string | null; external_job_id: string | null; video_url: string | null; is_marketing?: boolean }
 interface AiLectureItem { id: string; document_name: string | null; video_url: string | null; presentation_json: any }
 interface QuestionItem { id: string; question: string; options: string[] | null; correct_answer?: string }
 interface AssignmentItem { id: string; title: string; description: string | null; due_date: string | null }
@@ -96,31 +132,45 @@ function ClassesTabContent({ topicId, chapterId, topicVideoId, topicVideoPlatfor
   const [error, setError] = useState(false);
   const [loadingLectureId, setLoadingLectureId] = useState<string | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState<string>('all');
+  const [isChapterFree, setIsChapterFree] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(false);
     const videosUrl = `${SUPABASE_URL}/rest/v1/topic_videos?topic_id=eq.${topicId}&select=*&order=language.asc,display_order.asc`;
-    const aiUrl = `${SUPABASE_URL}/rest/v1/video_generation_jobs?select=id,document_name,external_job_id,video_url,created_at,ai_assistant_documents!inner(topic_id,chapter_id)&is_published=eq.true&status=eq.completed&ai_assistant_documents.topic_id=eq.${topicId}&order=created_at.desc`;
+    const aiUrl = `${SUPABASE_URL}/rest/v1/video_generation_jobs?select=id,document_name,external_job_id,video_url,is_marketing,created_at,ai_assistant_documents!inner(topic_id,chapter_id)&is_published=eq.true&status=eq.completed&ai_assistant_documents.topic_id=eq.${topicId}&order=created_at.desc`;
     console.log('[Preview][Classes] fetching topic_videos + ai_lectures for topicId:', topicId);
-    Promise.all([fetch(videosUrl, { headers: REST_HEADERS }), fetch(aiUrl, { headers: REST_HEADERS })])
-      .then(async ([vRes, aRes]) => {
+    Promise.all([
+      fetch(videosUrl, { headers: REST_HEADERS }),
+      fetch(aiUrl, { headers: REST_HEADERS }),
+      getFreePreviewChapterIds(courseId),
+      getLectureVisibilityMode(topicId),
+    ])
+      .then(async ([vRes, aRes, freeIds, visMode]) => {
         console.log('[Preview][Classes] topic_videos status:', vRes.status, '| ai_lectures status:', aRes.status);
         const vData = vRes.ok ? await vRes.json().catch(() => []) : [];
         const aData = aRes.ok ? await aRes.json().catch(() => []) : [];
         if (!cancelled) {
           setTopicVideos(Array.isArray(vData) ? vData.filter((v: any) => v.is_active !== false) : []);
-          setAiLectures(Array.isArray(aData) ? aData : []);
+          const chapterFree = (freeIds as string[]).length === 0 || (freeIds as string[]).includes(chapterId);
+          setIsChapterFree(chapterFree);
+          const rawLectures: AiLecturePreviewItem[] = Array.isArray(aData) ? aData : [];
+          setAiLectures(filterLecturesByVisibility(rawLectures, visMode as string));
           if (!vRes.ok && !aRes.ok && !topicVideoId && !aiGeneratedVideoUrl) setError(true);
         }
       })
       .catch(e => { if (!cancelled && !topicVideoId && !aiGeneratedVideoUrl) setError(true); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [topicId]);
+  }, [topicId, courseId, chapterId]);
 
   const handleWatchAILecture = useCallback(async (lec: AiLecturePreviewItem) => {
+    // Gate: only free chapters are playable on the preview screen
+    if (!isChapterFree) {
+      onBuy();
+      return;
+    }
     setLoadingLectureId(lec.id);
     try {
       const res = await fetch(
@@ -130,8 +180,18 @@ function ClassesTabContent({ topicId, chapterId, topicVideoId, topicVideoPlatfor
       const data = res.ok ? await res.json().catch(() => []) : [];
       const full = Array.isArray(data) && data.length ? data[0] : null;
       if (full) {
+        // V4 player: use when an external_job_id exists (new AI-generated presentations)
+        if (full.external_job_id) {
+          (navigation.navigate as any)('V4Player', {
+            jobId: full.external_job_id,
+            topicId, chapterId, courseId,
+            topicTitle: full.document_name || topicTitle,
+          });
+          return;
+        }
+        // Legacy path: navigate to the section-by-section AI player
         (navigation.navigate as any)('AILecturePlayer', {
-          jobId: full.external_job_id || full.id,
+          jobId: full.id,
           topicTitle: full.document_name || topicTitle,
           presentationJson: full.presentation_json || undefined,
           videoUrl: full.video_url || undefined,
@@ -140,17 +200,26 @@ function ClassesTabContent({ topicId, chapterId, topicVideoId, topicVideoPlatfor
         return;
       }
     } catch { } finally { setLoadingLectureId(null); }
+    // Fallback: use the top-level external_job_id if already available
+    if (lec.external_job_id) {
+      (navigation.navigate as any)('V4Player', {
+        jobId: lec.external_job_id,
+        topicId, chapterId, courseId,
+        topicTitle: lec.document_name || topicTitle,
+      });
+      return;
+    }
     if (lec.video_url) {
       const base = lec.video_url.substring(0, lec.video_url.lastIndexOf('/') + 1);
       const presentationUrl = lec.video_url.endsWith('.json') ? lec.video_url : base + 'presentation.json';
       (navigation.navigate as any)('AILecturePlayer', {
-        jobId: lec.external_job_id || lec.id,
+        jobId: lec.id,
         topicTitle: lec.document_name || topicTitle,
         presentationUrl, videoUrl: lec.video_url,
         topicId, courseId, initialLanguage: 'english',
       });
     }
-  }, [topicId, courseId, topicTitle, navigation]);
+  }, [topicId, chapterId, courseId, topicTitle, navigation, isChapterFree, onBuy]);
 
   const openVideo = useCallback((platform: string, videoId: string) => {
     const url = platform === 'vimeo' ? `https://vimeo.com/${videoId}` : `https://www.youtube.com/watch?v=${videoId}`;

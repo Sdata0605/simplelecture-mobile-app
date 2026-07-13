@@ -123,6 +123,10 @@ interface PresentationData {
   presentation_title: string;
   sections: Section[];
   base_url?: string;
+  vimeo_mp4_url?: string;
+  kannada_vimeo_mp4_url?: string;
+  final_video_path?: string;
+  kannada_final_video?: string;
 }
 
 type AILecturePlayerScreenRouteProp = RouteProp<RootStackParamList, 'AILecturePlayer'>;
@@ -154,7 +158,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
   // they come from navigation params.
   const params: any = embedded ? props : (route.params || {});
   const { presentationUrl, presentationJson, videoUrl, jobId: passedJobId, topicTitle, startFullscreen, initialLanguage, topicId, chapterId, subjectId, courseId } = params;
-  const playerLanguage = initialLanguage || 'english';
+  const [selectedLanguage, setSelectedLanguage] = useState(initialLanguage || 'english');
   
   // Extract jobId from videoUrl if not directly provided
   const jobId = passedJobId || extractJobIdFromUrl(videoUrl);
@@ -789,7 +793,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     const collectSectionVideos = (section: any): { url: string; type: 'avatar' | 'video' }[] => {
       const videos: { url: string; type: 'avatar' | 'video' }[] = [];
       const seen = new Set<string>();
-      const avatarPath = getAvatarPathForSection(section, playerLanguage);
+      const avatarPath = getAvatarPathForSection(section, selectedLanguage);
       if (avatarPath) {
         const avatarUrl = getFullUrl(avatarPath, 'avatar');
         if (avatarUrl && !seen.has(avatarUrl)) {
@@ -883,7 +887,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     console.log(`[AILecturePlayer] Cached: ${preloadedUrlsRef.current.size}, Failed: ${failedUrlsRef.current.size}`);
 
     const firstSection = data.sections[0];
-    const firstAvatarPath = firstSection ? getAvatarPathForSection(firstSection, playerLanguage) : null;
+    const firstAvatarPath = firstSection ? getAvatarPathForSection(firstSection, selectedLanguage) : null;
     if (firstSection && firstAvatarPath) {
       const avatarRemoteUrl = getFullUrl(firstAvatarPath, 'avatar');
       if (avatarRemoteUrl) {
@@ -935,12 +939,12 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     }
     
     const nextSection = presentationData.sections[nextIndex];
-    const nextAvatarPath = getAvatarPathForSection(nextSection, playerLanguage);
+    const nextAvatarPath = getAvatarPathForSection(nextSection, selectedLanguage);
     if (!nextAvatarPath) {
       return;
     }
     
-    const currentAvatarPath = currentSection ? getAvatarPathForSection(currentSection, playerLanguage) : null;
+    const currentAvatarPath = currentSection ? getAvatarPathForSection(currentSection, selectedLanguage) : null;
     if (nextAvatarPath === currentAvatarPath) {
       return;
     }
@@ -1418,7 +1422,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
 
     try {
       const targetSection = presentationData.sections[index];
-      const targetAvatarPath = targetSection ? getAvatarPathForSection(targetSection, playerLanguage) : null;
+      const targetAvatarPath = targetSection ? getAvatarPathForSection(targetSection, selectedLanguage) : null;
 
       if (!targetAvatarPath) {
         // No avatar for this section - rely on the timer fallback to drive content.
@@ -1691,6 +1695,13 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
       transitionToSection(currentSectionIndex + 1);
     }
   };
+
+  const handleLanguageSwitch = useCallback((lang: string) => {
+    if (lang === selectedLanguage) return;
+    setSelectedLanguage(lang);
+    // Reload the current section so the new language's avatar is used immediately
+    transitionToSection(currentSectionIndex);
+  }, [selectedLanguage, currentSectionIndex, transitionToSection]);
 
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -2003,7 +2014,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     // Use different avatar layer styles for portrait vs fullscreen
     const avatarLayerStyle = isFullscreen ? styles.avatarLayer : styles.portraitAvatarLayer;
     
-    const currentSectionAvatarPath = currentSection ? getAvatarPathForSection(currentSection, playerLanguage) : null;
+    const currentSectionAvatarPath = currentSection ? getAvatarPathForSection(currentSection, selectedLanguage) : null;
     if (!currentSectionAvatarPath) {
       if (!useTimerFallback) setUseTimerFallback(true);
       return <View style={avatarLayerStyle} />;
@@ -2340,6 +2351,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
 
   const renderPortraitControls = () => {
     const totalSections = presentationData?.sections.length || 0;
+    const hasKannada = !!(presentationData?.kannada_vimeo_mp4_url);
     return (
       <View style={styles.portraitControlsContainer} onTouchStart={handleControlInteraction}>
         <View style={styles.portraitSingleRow}>
@@ -2385,6 +2397,22 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
             </TouchableOpacity>
           )}
         </View>
+        {/* Language selector — only shown when a Kannada version exists */}
+        {hasKannada && (
+          <View style={styles.langSelectorRow}>
+            {(['english', 'kannada'] as const).map(lang => (
+              <TouchableOpacity
+                key={lang}
+                style={[styles.langSelectorBtn, selectedLanguage === lang && styles.langSelectorBtnActive]}
+                onPress={() => handleLanguageSwitch(lang)}
+              >
+                <Text style={[styles.langSelectorBtnText, selectedLanguage === lang && styles.langSelectorBtnTextActive]}>
+                  {lang === 'english' ? 'English' : 'ಕನ್ನಡ'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
       </View>
     );
   };
@@ -3056,6 +3084,33 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(99, 102, 241, 0.15)',
     paddingHorizontal: 6,
     paddingVertical: 5,
+  },
+  langSelectorRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 4,
+    paddingBottom: 2,
+  },
+  langSelectorBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.4)',
+    backgroundColor: 'transparent',
+  },
+  langSelectorBtnActive: {
+    backgroundColor: '#6366f1',
+    borderColor: '#6366f1',
+  },
+  langSelectorBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: 'rgba(230, 237, 243, 0.6)',
+  },
+  langSelectorBtnTextActive: {
+    color: '#fff',
   },
   portraitSingleRow: {
     flexDirection: 'row',

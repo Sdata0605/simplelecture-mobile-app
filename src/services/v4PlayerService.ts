@@ -2,8 +2,8 @@ import * as FileSystem from 'expo-file-system';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './supabase';
 
 // V4 streams the SAME presentation.json + media as web V4, served through the
-// Supabase `v3-player-proxy` edge function. SUPABASE_URL is the worker proxy.
-const PROXY_BASE = `${SUPABASE_URL}/functions/v1/v3-player-proxy`;
+// Supabase `v4-player-proxy` edge function. SUPABASE_URL is the worker proxy.
+const PROXY_BASE = `${SUPABASE_URL}/functions/v1/v4-player-proxy`;
 const CACHE_DIR = `${FileSystem.cacheDirectory}v4_cache/`;
 const MIN_FILE_SIZE = 1024;
 
