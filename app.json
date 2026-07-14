@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Simple Lecture",
-    "slug": "edulearn-mobile",
+    "slug": "roiproject0",
     "version": "1.0.0",
     "scheme": "com.edulearn.mobile",
     "orientation": "portrait",
@@ -79,9 +79,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "9c1ebb82-345b-4b63-aecf-bcec57b9be19"
+        "projectId": "d62d91b5-db06-4ffd-b9ac-5b3dec6ae7a9"
       }
     },
-    "owner": "prashantuser4s-team"
+    "owner": "roiproject0-slg"
   }
 }
