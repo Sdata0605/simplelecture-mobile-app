@@ -63,21 +63,28 @@ async function generateAndSharePdf(
   pages: NotePage[],
   topicTitle: string,
 ): Promise<void> {
+  // expo-print and expo-sharing are optional dependencies.
+  // We guard with try/require so Metro doesn't fail at bundle time.
+  let Print: any = null;
+  let Sharing: any = null;
   try {
-    // Dynamic import so a missing package doesn't crash the module.
-    // @ts-ignore — expo-print is an optional peer; the catch handles absence.
-    const Print = await import('expo-print').catch(() => null);
-    // @ts-ignore — expo-sharing is an optional peer; the catch handles absence.
-    const Sharing = await import('expo-sharing').catch(() => null);
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    Print = require('expo-print');
+  } catch (_) { /* not installed */ }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    Sharing = require('expo-sharing');
+  } catch (_) { /* not installed */ }
 
-    if (!Print || !Sharing) {
-      Alert.alert(
-        'PDF Export Unavailable',
-        'PDF export requires expo-print and expo-sharing. Please install them to enable this feature.',
-      );
-      return;
-    }
+  if (!Print || !Sharing) {
+    Alert.alert(
+      'PDF Export Unavailable',
+      'PDF export requires expo-print and expo-sharing. Run:\n\nnpx expo install expo-print expo-sharing\n\nthen rebuild.',
+    );
+    return;
+  }
 
+  try {
     const html = buildPrintHtml(pages, topicTitle);
     const { uri } = await Print.printToFileAsync({ html });
     const canShare = await Sharing.isAvailableAsync();
