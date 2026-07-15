@@ -4,10 +4,11 @@
  * Responsibilities:
  * - Loads notes via useTopicNotes
  * - Selects book reader (default) or card reader (legacy pref via AsyncStorage)
- * - Renders topic title, Contents button, Share button, page indicator, Prev/Next buttons
+ * - Renders topic title, Contents button, Download PDF button, page indicator, Prev/Next buttons
  * - Delegates page rendering to AnimatedBookPager
  * - Handles loading, empty, and error states
- * - Manages PDF generation via expo-print + expo-sharing
+ * - Manages PDF generation (expo-print) and download: Android saves straight
+ *   to a user-granted folder (SAF); iOS uses the share sheet ("Save to Files")
  */
 
 import React, {
@@ -32,6 +33,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 
 import { useTopicNotes } from '../../../hooks/useTopicNotes';
 import { NotePage } from '../../../types/topicNotes';
@@ -40,6 +42,7 @@ import { NotesContentsModal } from './NotesContentsModal';
 import { NotesCardReader } from './NotesCardReader';
 import { NotePage as NotePageComponent } from './NotePage';
 import { colors, spacing } from '../../../constants/theme';
+import { sanitizePdfBaseName } from '../../../utils/pdfFileName';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -58,26 +61,104 @@ function getLayoutMode(width: number): LayoutMode {
 }
 
 // ---------------------------------------------------------------------------
-// PDF generation (expo-print creates the file, expo-sharing opens the sheet)
+// PDF generation & download
+//
+// expo-print creates the PDF. What happens next is platform-specific:
+// - Android: save directly into a user-granted folder (Downloads by default)
+//   via the Storage Access Framework. Only the very first save shows a
+//   one-time folder picker; the granted folder is persisted in AsyncStorage
+//   so later saves are silent. If the user denies folder access, we fall
+//   back to the share sheet so the feature never dead-ends.
+// - iOS: there is no public Downloads folder; the share sheet ("Save to
+//   Files") IS the platform's save mechanism, so it stays.
 // ---------------------------------------------------------------------------
 
-async function generateAndSharePdf(
+const PDF_DIR_KEY = 'notes.pdfDirUri';
+
+async function sharePdf(uri: string, topicTitle: string): Promise<void> {
+  const canShare = await Sharing.isAvailableAsync();
+  if (canShare) {
+    await Sharing.shareAsync(uri, {
+      mimeType: 'application/pdf',
+      dialogTitle: `Share ${topicTitle} Notes`,
+      UTI: 'com.adobe.pdf',
+    });
+  } else {
+    Alert.alert('Sharing unavailable', 'PDF was generated but sharing is not available on this device.');
+  }
+}
+
+/**
+ * Save the generated PDF into a user-granted folder on Android.
+ * Returns the display file name on success, or null when the user
+ * declined folder access (caller falls back to the share sheet).
+ */
+async function savePdfToDeviceAndroid(
+  sourceUri: string,
+  baseName: string,
+): Promise<string | null> {
+  const SAF = FileSystem.StorageAccessFramework;
+
+  const base64 = await FileSystem.readAsStringAsync(sourceUri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+
+  const writeTo = async (dirUri: string): Promise<void> => {
+    const fileUri = await SAF.createFileAsync(dirUri, baseName, 'application/pdf');
+    await FileSystem.writeAsStringAsync(fileUri, base64, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+  };
+
+  // Try the previously granted folder first (silent save).
+  const savedDir = await AsyncStorage.getItem(PDF_DIR_KEY).catch(() => null);
+  if (savedDir) {
+    try {
+      await writeTo(savedDir);
+      return `${baseName}.pdf`;
+    } catch {
+      // Permission revoked or folder gone — forget it and re-prompt below.
+      await AsyncStorage.removeItem(PDF_DIR_KEY).catch(() => {});
+    }
+  }
+
+  // One-time folder picker, hinted at Downloads when supported.
+  let initialUri: string | undefined;
+  try {
+    initialUri = SAF.getUriForDirectoryInRoot('Download');
+  } catch {
+    initialUri = undefined;
+  }
+  const perm = await SAF.requestDirectoryPermissionsAsync(initialUri);
+  if (!perm.granted) return null;
+
+  await AsyncStorage.setItem(PDF_DIR_KEY, perm.directoryUri).catch(() => {});
+  await writeTo(perm.directoryUri);
+  return `${baseName}.pdf`;
+}
+
+async function generateAndDownloadPdf(
   pages: NotePage[],
   topicTitle: string,
 ): Promise<void> {
   try {
     const html = buildPrintHtml(pages, topicTitle);
     const { uri } = await Print.printToFileAsync({ html });
-    const canShare = await Sharing.isAvailableAsync();
-    if (canShare) {
-      await Sharing.shareAsync(uri, {
-        mimeType: 'application/pdf',
-        dialogTitle: `Share ${topicTitle} Notes`,
-        UTI: 'com.adobe.pdf',
-      });
-    } else {
-      Alert.alert('Sharing unavailable', 'PDF was generated but sharing is not available on this device.');
+
+    if (Platform.OS === 'android') {
+      const savedName = await savePdfToDeviceAndroid(uri, sanitizePdfBaseName(topicTitle));
+      if (savedName) {
+        Alert.alert('PDF Downloaded', `"${savedName}" was saved to your phone.`);
+        return;
+      }
+      // User declined folder access — explain, then offer the share sheet.
+      Alert.alert(
+        'Folder access needed',
+        'To download directly, allow folder access next time. Opening the share options instead so you can still save the PDF.',
+      );
     }
+
+    await sharePdf(uri, topicTitle);
   } catch (err) {
     Alert.alert(
       'PDF Export Failed',
@@ -222,7 +303,7 @@ export function NotesBookReader({
   const handleShare = useCallback(async () => {
     if (pdfLoading || pages.length === 0) return;
     setPdfLoading(true);
-    await generateAndSharePdf(pages, topicTitle ?? jobTitle ?? 'Study Notes');
+    await generateAndDownloadPdf(pages, topicTitle ?? jobTitle ?? 'Study Notes');
     setPdfLoading(false);
   }, [pdfLoading, pages, topicTitle, jobTitle]);
 
@@ -311,12 +392,12 @@ export function NotesBookReader({
           style={s.topBarBtn}
           onPress={handleShare}
           disabled={pdfLoading}
-          accessibilityLabel="Share as PDF"
+          accessibilityLabel="Download PDF"
         >
           {pdfLoading ? (
             <ActivityIndicator size="small" color={colors.primary} />
           ) : (
-            <Ionicons name="share-outline" size={18} color={colors.primary} />
+            <Ionicons name="download-outline" size={18} color={colors.primary} />
           )}
         </TouchableOpacity>
       </View>
