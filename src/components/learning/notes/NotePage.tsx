@@ -2,6 +2,10 @@
  * NotePage renders the content of a single study-note page:
  * prose, callouts (definition/formula/equation), bullets, images, questions.
  *
+ * All math/chemistry notation renders through MathText (KaTeX WebView) —
+ * MathText falls back to plain <Text> when a snippet contains no LaTeX,
+ * so plain-prose pages stay cheap.
+ *
  * Receives a pre-built NotePage object — all parsing happened in notePagination.ts.
  */
 
@@ -13,12 +17,13 @@ import {
   Image,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { NotePage as NotePageType } from '../../../types/topicNotes';
-import { colors, spacing, fontSize, borderRadius } from '../../../constants/theme';
+import { colors, spacing, borderRadius } from '../../../constants/theme';
+import MathText from '../../MathText';
+import { stripEmbeddedOptions } from '../../../utils/questionText';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -26,19 +31,6 @@ import { colors, spacing, fontSize, borderRadius } from '../../../constants/them
 
 interface NotePageProps {
   page: NotePageType;
-  topicId?: string;
-  chapterId?: string;
-  subjectId?: string;
-  generatingSection?: string | null;
-  onGenerateQuestions?: (params: {
-    sectionId: string | number;
-    sectionTitle: string;
-    sectionText: string;
-    keyPoints: string[];
-    chapterId?: string;
-    subjectId?: string;
-  }) => Promise<{ success: boolean; error?: string }>;
-  onGenerateSuccess?: () => void;
   scrollable?: boolean;
 }
 
@@ -69,7 +61,13 @@ function CalloutBlock({ type, text }: { type: string; text: string }) {
           {type.charAt(0).toUpperCase() + type.slice(1)}
         </Text>
       </View>
-      <Text style={s.calloutText}>{text}</Text>
+      {/* Formula/equation callouts often carry bare LaTeX with no $...$ */}
+      <MathText
+        content={text}
+        textStyle={s.calloutText}
+        color={colors.text}
+        mathOnly={type === 'formula' || type === 'equation'}
+      />
     </View>
   );
 }
@@ -78,7 +76,12 @@ function BulletItem({ text }: { text: string }) {
   return (
     <View style={s.bulletRow}>
       <Text style={s.bulletDot}>•</Text>
-      <Text style={s.bulletText}>{text}</Text>
+      <MathText
+        content={text}
+        style={s.bulletContent}
+        textStyle={s.bulletText}
+        color={colors.text}
+      />
     </View>
   );
 }
@@ -104,12 +107,16 @@ function QuestionCard({
   isImportant: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const questionText = stripEmbeddedOptions(
+    question.question_text,
+    question.options,
+  );
   return (
     <TouchableOpacity
       activeOpacity={0.8}
       style={[s.qCard, isImportant && s.qCardImportant]}
       onPress={() => setExpanded((e) => !e)}
-      accessibilityLabel={question.question_text}
+      accessibilityLabel={questionText}
     >
       {isImportant && (
         <View style={s.importantBadge}>
@@ -117,9 +124,15 @@ function QuestionCard({
           <Text style={s.importantBadgeText}>Important</Text>
         </View>
       )}
-      <Text style={s.qText}>{question.question_text}</Text>
+      <MathText content={questionText} textStyle={s.qText} color={colors.text} />
       {expanded && question.explanation ? (
-        <Text style={s.qExplanation}>{question.explanation}</Text>
+        <View style={s.qExplanationBox}>
+          <MathText
+            content={question.explanation}
+            textStyle={s.qExplanation}
+            color={colors.textSecondary}
+          />
+        </View>
       ) : null}
       {!expanded && question.explanation ? (
         <Text style={s.qHint}>Tap for explanation</Text>
@@ -132,41 +145,7 @@ function QuestionCard({
 // Main component
 // ---------------------------------------------------------------------------
 
-export function NotePage({
-  page,
-  topicId,
-  chapterId,
-  subjectId,
-  generatingSection,
-  onGenerateQuestions,
-  scrollable = true,
-}: NotePageProps) {
-  const [generateError, setGenerateError] = useState<string | null>(null);
-  const isGenerating = generatingSection === page.sectionId;
-  const practiceCount = page.questions.practice.length;
-  const showGenerateBtn =
-    page.isLastPageOfSection &&
-    practiceCount < 3 &&
-    !!onGenerateQuestions;
-
-  const keyPoints = page.bullets.map((b) => b.text);
-
-  async function handleGenerate() {
-    if (!onGenerateQuestions) return;
-    setGenerateError(null);
-    const result = await onGenerateQuestions({
-      sectionId: page.sectionId,
-      sectionTitle: page.sectionTitle,
-      sectionText: page.prose,
-      keyPoints,
-      chapterId,
-      subjectId,
-    });
-    if (!result.success) {
-      setGenerateError(result.error ?? 'Failed to generate questions');
-    }
-  }
-
+export function NotePage({ page, scrollable = true }: NotePageProps) {
   const content = (
     <View style={s.container}>
       {/* Section title on the first page */}
@@ -192,7 +171,14 @@ export function NotePage({
       ))}
 
       {/* Prose */}
-      {!!page.prose && <Text style={s.prose}>{page.prose}</Text>}
+      {!!page.prose && (
+        <MathText
+          content={page.prose}
+          style={s.proseBlock}
+          textStyle={s.prose}
+          color={colors.text}
+        />
+      )}
 
       {/* Bullets — last page only */}
       {page.bullets.length > 0 && (
@@ -232,33 +218,6 @@ export function NotePage({
                 <QuestionCard key={q.id} question={q} isImportant={false} />
               ))}
             </>
-          )}
-        </View>
-      )}
-
-      {/* Generate practice questions button */}
-      {showGenerateBtn && (
-        <View style={s.generateSection}>
-          <TouchableOpacity
-            style={[s.generateBtn, isGenerating && s.generateBtnDisabled]}
-            onPress={handleGenerate}
-            disabled={isGenerating}
-            accessibilityLabel="Generate practice questions"
-          >
-            {isGenerating ? (
-              <>
-                <ActivityIndicator size="small" color={colors.white} />
-                <Text style={s.generateBtnText}>Generating…</Text>
-              </>
-            ) : (
-              <>
-                <Ionicons name="sparkles-outline" size={16} color={colors.white} />
-                <Text style={s.generateBtnText}>Generate Practice Questions</Text>
-              </>
-            )}
-          </TouchableOpacity>
-          {!!generateError && (
-            <Text style={s.generateError}>{generateError}</Text>
           )}
         </View>
       )}
@@ -312,11 +271,11 @@ const s = StyleSheet.create({
   },
 
   // Prose
+  proseBlock: { marginBottom: spacing.sm },
   prose: {
     fontSize: 15,
     lineHeight: 24,
     color: colors.text,
-    marginBottom: spacing.sm,
   },
 
   // Callouts
@@ -354,7 +313,8 @@ const s = StyleSheet.create({
     marginRight: 6,
     lineHeight: 22,
   },
-  bulletText: { flex: 1, fontSize: 14, color: colors.text, lineHeight: 22 },
+  bulletContent: { flex: 1 },
+  bulletText: { fontSize: 14, color: colors.text, lineHeight: 22 },
 
   // Images
   imageSection: { marginBottom: spacing.sm },
@@ -393,35 +353,16 @@ const s = StyleSheet.create({
   },
   importantBadgeText: { fontSize: 9, fontWeight: '700', color: '#fff' },
   qText: { fontSize: 13, color: colors.text, lineHeight: 20 },
-  qExplanation: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    lineHeight: 18,
+  qExplanationBox: {
     marginTop: 6,
     paddingTop: 6,
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  qHint: { fontSize: 11, color: colors.textMuted, marginTop: 4, fontStyle: 'italic' },
-
-  // Generate questions
-  generateSection: { marginTop: spacing.sm },
-  generateBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    backgroundColor: colors.primary,
-    paddingVertical: 10,
-    paddingHorizontal: spacing.md,
-    borderRadius: 8,
-  },
-  generateBtnDisabled: { opacity: 0.65 },
-  generateBtnText: { color: colors.white, fontSize: 13, fontWeight: '700' },
-  generateError: {
-    color: colors.error,
+  qExplanation: {
     fontSize: 12,
-    marginTop: 6,
-    textAlign: 'center',
+    color: colors.textSecondary,
+    lineHeight: 18,
   },
+  qHint: { fontSize: 11, color: colors.textMuted, marginTop: 4, fontStyle: 'italic' },
 });

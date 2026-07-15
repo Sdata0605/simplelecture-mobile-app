@@ -102,8 +102,15 @@ const MathText = memo(({ content, style, textStyle, color = colors.gray900, math
   const bodyHtml = `<div>${escapeHtml(prepared)}</div>`;
   const htmlContent = buildKatexHtml(bodyHtml, color);
 
+  // pointerEvents="none": this is a display-only surface (scrolling is
+  // disabled), but WebViews still consume touch streams by default, which
+  // breaks parent scroll views and the notes pager's swipe gestures when a
+  // drag starts on a math block. Let all touches pass through.
   return (
-    <View style={[styles.container, style, { height: webViewHeight }]}>
+    <View
+      style={[styles.container, style, { height: webViewHeight }]}
+      pointerEvents="none"
+    >
       <WebView
         ref={webViewRef}
         originWhitelist={['*']}

@@ -3,19 +3,21 @@
  *
  * Responsibilities:
  * - Loads notes via useTopicNotes
- * - Selects book reader (default) or card reader (legacy pref via AsyncStorage)
- * - Renders topic title, Contents button, Download PDF button, page indicator, Prev/Next buttons
- * - Delegates page rendering to AnimatedBookPager
+ * - Shows ONE SECTION PER SCREEN: pages are merged so each section becomes a
+ *   single vertically-scrollable screen; the reader moves horizontally
+ *   between sections (swipe or Prev/Next buttons)
+ * - Renders topic title, Contents button, Download PDF button, section indicator
+ * - Delegates section rendering to AnimatedBookPager
  * - Handles loading, empty, and error states
- * - Manages PDF generation (expo-print) and download: Android saves straight
- *   to a user-granted folder (SAF); iOS uses the share sheet ("Save to Files")
+ * - Manages PDF generation (expo-print, with KaTeX so math typesets) and
+ *   download: Android saves straight to a user-granted folder (SAF); iOS
+ *   uses the share sheet ("Save to Files")
  */
 
 import React, {
   useState,
   useCallback,
   useEffect,
-  useRef,
   useMemo,
 } from 'react';
 import {
@@ -37,18 +39,13 @@ import * as FileSystem from 'expo-file-system';
 
 import { useTopicNotes } from '../../../hooks/useTopicNotes';
 import { NotePage } from '../../../types/topicNotes';
+import { mergePagesIntoSectionPages } from '../../../utils/notePagination';
 import { AnimatedBookPager, LayoutMode } from './AnimatedBookPager';
 import { NotesContentsModal } from './NotesContentsModal';
-import { NotesCardReader } from './NotesCardReader';
 import { NotePage as NotePageComponent } from './NotePage';
 import { colors, spacing } from '../../../constants/theme';
 import { sanitizePdfBaseName } from '../../../utils/pdfFileName';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const LEGACY_READER_KEY = 'notes.legacyReader';
+import { stripEmbeddedOptions } from '../../../utils/questionText';
 
 // ---------------------------------------------------------------------------
 // Layout helper
@@ -167,28 +164,40 @@ async function generateAndDownloadPdf(
   }
 }
 
+/** Escape note text for embedding in the print HTML. */
+function escapePrintHtml(text: string): string {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function buildPrintHtml(pages: NotePage[], title: string): string {
   const pageHtml = pages
     .map((page) => {
       const calloutsHtml = page.callouts
-        .map((c) => `<div class="callout callout-${c.type}"><strong>${c.type}:</strong> ${c.text}</div>`)
+        .map((c) => `<div class="callout callout-${c.type}"><strong>${c.type}:</strong> ${escapePrintHtml(c.text)}</div>`)
         .join('');
       const bulletsHtml =
         page.bullets.length > 0
-          ? `<ul>${page.bullets.map((b) => `<li>${b.text}</li>`).join('')}</ul>`
+          ? `<ul>${page.bullets.map((b) => `<li>${escapePrintHtml(b.text)}</li>`).join('')}</ul>`
           : '';
       const imagesHtml = page.images
         .map((img) => `<img src="${img.url}" style="max-width:100%;height:auto;margin:8px 0;" />`)
         .join('');
       const qHtml = [
-        ...page.questions.important.map((q) => `<p class="q important">★ ${q.question_text}</p>`),
-        ...page.questions.practice.map((q) => `<p class="q">${q.question_text}</p>`),
+        ...page.questions.important.map(
+          (q) => `<p class="q important">★ ${escapePrintHtml(stripEmbeddedOptions(q.question_text, q.options))}</p>`,
+        ),
+        ...page.questions.practice.map(
+          (q) => `<p class="q">${escapePrintHtml(stripEmbeddedOptions(q.question_text, q.options))}</p>`,
+        ),
       ].join('');
       return `
         <div class="page">
-          ${page.isFirstPageOfSection ? `<h2>${page.sectionTitle}</h2>` : `<h3>${page.sectionTitle} (continued)</h3>`}
+          ${page.isFirstPageOfSection ? `<h2>${escapePrintHtml(page.sectionTitle)}</h2>` : `<h3>${escapePrintHtml(page.sectionTitle)} (continued)</h3>`}
           ${calloutsHtml}
-          ${page.prose ? `<p>${page.prose.replace(/\n\n/g, '</p><p>')}</p>` : ''}
+          ${page.prose ? `<p>${escapePrintHtml(page.prose).replace(/\n\n/g, '</p><p>')}</p>` : ''}
           ${bulletsHtml}
           ${imagesHtml}
           ${qHtml}
@@ -196,8 +205,15 @@ function buildPrintHtml(pages: NotePage[], title: string): string {
     })
     .join('<hr/>');
 
+  // KaTeX scripts are loaded synchronously (plain <script src>), and the
+  // render call runs inline at the end of <body>, so math is typeset before
+  // the document's load event — which is what expo-print waits for.
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/>
-    <title>${title}</title>
+    <title>${escapePrintHtml(title)}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/mhchem.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
     <style>
       body { font-family: Georgia, serif; font-size: 14px; color: #1F2937; padding: 24px; max-width: 800px; margin: auto; }
       h1 { font-size: 22px; margin-bottom: 4px; }
@@ -215,8 +231,23 @@ function buildPrintHtml(pages: NotePage[], title: string): string {
       .page { margin-bottom: 24px; }
     </style>
   </head><body>
-    <h1>${title} — Study Notes</h1>
+    <h1>${escapePrintHtml(title)} — Study Notes</h1>
     ${pageHtml}
+    <script>
+      if (typeof renderMathInElement === 'function') {
+        renderMathInElement(document.body, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false },
+            { left: '\\\\[', right: '\\\\]', display: true },
+            { left: '\\\\(', right: '\\\\)', display: false }
+          ],
+          throwOnError: false,
+          errorColor: '#cc0000',
+          trust: false
+        });
+      }
+    </script>
   </body></html>`;
 }
 
@@ -233,13 +264,10 @@ interface NotesBookReaderProps {
 
 export function NotesBookReader({
   topicId,
-  chapterId,
-  subjectId,
   topicTitle,
 }: NotesBookReaderProps) {
-  const [pageIndex, setPageIndex] = useState(0);
+  const [sectionIndex, setSectionIndex] = useState(0);
   const [contentsVisible, setContentsVisible] = useState(false);
-  const [legacyReader, setLegacyReader] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
   const { width } = Dimensions.get('window');
@@ -249,35 +277,40 @@ export function NotesBookReader({
     loading,
     pages,
     sectionTitles,
-    sectionFirstPageIndexes,
     error,
     jobTitle,
     isEmpty,
     refetch,
-    generatingSection,
-    generateQuestions,
   } = useTopicNotes(topicId);
+
+  // One screen per SECTION: merge the paginated pages back into whole-section
+  // pages. Each section scrolls vertically inside its screen; the pager moves
+  // horizontally between sections.
+  const sectionPages = useMemo(() => mergePagesIntoSectionPages(pages), [pages]);
+
+  // Contents modal jumps map 1:1 to section indexes now.
+  const sectionFirstPageIndexes = useMemo(
+    () => sectionPages.map((_, i) => i),
+    [sectionPages],
+  );
 
   // Load preferences
   useEffect(() => {
-    AsyncStorage.getItem(LEGACY_READER_KEY)
-      .then((v) => setLegacyReader(v === 'true'))
-      .catch(() => {});
     AccessibilityInfo.isReduceMotionEnabled()
       .then(setReducedMotion)
       .catch(() => {});
   }, []);
 
-  // Clamp page index to valid range when pages change
+  // Clamp section index to valid range when sections change
   useEffect(() => {
-    if (pages.length > 0) {
-      setPageIndex((i) => Math.min(Math.max(i, 0), pages.length - 1));
+    if (sectionPages.length > 0) {
+      setSectionIndex((i) => Math.min(Math.max(i, 0), sectionPages.length - 1));
     }
-  }, [pages.length]);
+  }, [sectionPages.length]);
 
-  const safePageIndex = useMemo(
-    () => Math.min(Math.max(pageIndex, 0), Math.max(pages.length - 1, 0)),
-    [pageIndex, pages.length],
+  const safeSectionIndex = useMemo(
+    () => Math.min(Math.max(sectionIndex, 0), Math.max(sectionPages.length - 1, 0)),
+    [sectionIndex, sectionPages.length],
   );
 
   // ---------------------------------------------------------------------------
@@ -285,22 +318,22 @@ export function NotesBookReader({
   // ---------------------------------------------------------------------------
 
   const goNext = useCallback(() => {
-    setPageIndex((i) => Math.min(i + 1, pages.length - 1));
-  }, [pages.length]);
+    setSectionIndex((i) => Math.min(i + 1, sectionPages.length - 1));
+  }, [sectionPages.length]);
 
   const goPrev = useCallback(() => {
-    setPageIndex((i) => Math.max(i - 1, 0));
+    setSectionIndex((i) => Math.max(i - 1, 0));
   }, []);
 
   const jumpTo = useCallback((idx: number) => {
-    setPageIndex(Math.min(Math.max(idx, 0), pages.length - 1));
-  }, [pages.length]);
+    setSectionIndex(Math.min(Math.max(idx, 0), sectionPages.length - 1));
+  }, [sectionPages.length]);
 
   // ---------------------------------------------------------------------------
   // PDF
   // ---------------------------------------------------------------------------
 
-  const handleShare = useCallback(async () => {
+  const handleDownloadPdf = useCallback(async () => {
     if (pdfLoading || pages.length === 0) return;
     setPdfLoading(true);
     await generateAndDownloadPdf(pages, topicTitle ?? jobTitle ?? 'Study Notes');
@@ -308,23 +341,14 @@ export function NotesBookReader({
   }, [pdfLoading, pages, topicTitle, jobTitle]);
 
   // ---------------------------------------------------------------------------
-  // Page renderer for AnimatedBookPager
+  // Section renderer for AnimatedBookPager
   // ---------------------------------------------------------------------------
 
   const renderPage = useCallback(
     (page: NotePage, _index: number) => (
-      <NotePageComponent
-        key={page.id}
-        page={page}
-        topicId={topicId}
-        chapterId={chapterId}
-        subjectId={subjectId}
-        generatingSection={generatingSection}
-        onGenerateQuestions={generateQuestions}
-        scrollable
-      />
+      <NotePageComponent key={page.id} page={page} scrollable />
     ),
-    [topicId, chapterId, subjectId, generatingSection, generateQuestions],
+    [],
   );
 
   // ---------------------------------------------------------------------------
@@ -353,7 +377,7 @@ export function NotesBookReader({
     );
   }
 
-  if (isEmpty || pages.length === 0) {
+  if (isEmpty || sectionPages.length === 0) {
     return (
       <View style={s.center}>
         <Ionicons name="document-text-outline" size={52} color={colors.gray300} />
@@ -390,7 +414,7 @@ export function NotesBookReader({
 
         <TouchableOpacity
           style={s.topBarBtn}
-          onPress={handleShare}
+          onPress={handleDownloadPdf}
           disabled={pdfLoading}
           accessibilityLabel="Download PDF"
         >
@@ -402,121 +426,93 @@ export function NotesBookReader({
         </TouchableOpacity>
       </View>
 
-      {/* ── Page indicator ──────────────────────────────────────────── */}
+      {/* ── Section indicator ───────────────────────────────────────── */}
       <View style={s.pageIndicator}>
         <Text
           style={s.pageIndicatorText}
-          accessibilityLabel={`Page ${safePageIndex + 1} of ${pages.length}`}
+          accessibilityLabel={`Section ${safeSectionIndex + 1} of ${sectionPages.length}`}
         >
-          {safePageIndex + 1} / {pages.length}
+          {safeSectionIndex + 1} / {sectionPages.length}
         </Text>
         <Text style={s.sectionIndicatorText} numberOfLines={1}>
-          {pages[safePageIndex]?.sectionTitle ?? ''}
+          {sectionPages[safeSectionIndex]?.sectionTitle ?? ''}
         </Text>
       </View>
 
-      {/* ── Reader body ──────────────────────────────────────────────── */}
+      {/* ── Reader body — one section per screen, swipe horizontally ── */}
       <View style={s.readerBody}>
-        {legacyReader ? (
-          <NotesCardReader
-            pages={pages}
-            topicId={topicId}
-            chapterId={chapterId}
-            subjectId={subjectId}
-            generatingSection={generatingSection}
-            onGenerateQuestions={generateQuestions}
-          />
-        ) : (
-          <AnimatedBookPager
-            pages={pages}
-            currentPageIndex={safePageIndex}
-            onPageIndexChange={setPageIndex}
-            renderPage={renderPage}
-            layoutMode={layoutMode}
-            reducedMotion={reducedMotion}
-          />
-        )}
+        <AnimatedBookPager
+          pages={sectionPages}
+          currentPageIndex={safeSectionIndex}
+          onPageIndexChange={setSectionIndex}
+          renderPage={renderPage}
+          layoutMode={layoutMode}
+          reducedMotion={reducedMotion}
+        />
       </View>
 
-      {/* ── Navigation controls (hidden in legacy reader) ───────────── */}
-      {!legacyReader && (
-        <View style={s.navBar}>
-          <TouchableOpacity
-            style={[s.navBtn, safePageIndex === 0 && s.navBtnDisabled]}
-            onPress={goPrev}
-            disabled={safePageIndex === 0}
-            accessibilityLabel="Previous page"
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Ionicons
-              name="chevron-back"
-              size={20}
-              color={safePageIndex === 0 ? colors.gray300 : colors.primary}
-            />
-            <Text
-              style={[
-                s.navBtnText,
-                safePageIndex === 0 && s.navBtnTextDisabled,
-              ]}
-            >
-              Previous
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={s.readerToggleBtn}
-            onPress={() => {
-              const next = !legacyReader;
-              setLegacyReader(next);
-              AsyncStorage.setItem(LEGACY_READER_KEY, String(next)).catch(() => {});
-            }}
-            accessibilityLabel={legacyReader ? 'Switch to book reader' : 'Switch to card reader'}
-          >
-            <Ionicons
-              name={legacyReader ? 'book-outline' : 'albums-outline'}
-              size={16}
-              color={colors.textSecondary}
-            />
-          </TouchableOpacity>
-
-          <TouchableOpacity
+      {/* ── Prev / Next below the note card ─────────────────────────── */}
+      <View style={s.navBar}>
+        <TouchableOpacity
+          style={[s.navBtn, safeSectionIndex === 0 && s.navBtnDisabled]}
+          onPress={goPrev}
+          disabled={safeSectionIndex === 0}
+          accessibilityLabel="Previous section"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons
+            name="chevron-back"
+            size={20}
+            color={safeSectionIndex === 0 ? colors.gray300 : colors.primary}
+          />
+          <Text
             style={[
-              s.navBtn,
-              safePageIndex === pages.length - 1 && s.navBtnDisabled,
+              s.navBtnText,
+              safeSectionIndex === 0 && s.navBtnTextDisabled,
             ]}
-            onPress={goNext}
-            disabled={safePageIndex === pages.length - 1}
-            accessibilityLabel="Next page"
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Text
-              style={[
-                s.navBtnText,
-                safePageIndex === pages.length - 1 && s.navBtnTextDisabled,
-              ]}
-            >
-              Next
-            </Text>
-            <Ionicons
-              name="chevron-forward"
-              size={20}
-              color={
-                safePageIndex === pages.length - 1
-                  ? colors.gray300
-                  : colors.primary
-              }
-            />
-          </TouchableOpacity>
-        </View>
-      )}
+            Previous
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            s.navBtn,
+            s.navBtnRight,
+            safeSectionIndex === sectionPages.length - 1 && s.navBtnDisabled,
+          ]}
+          onPress={goNext}
+          disabled={safeSectionIndex === sectionPages.length - 1}
+          accessibilityLabel="Next section"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text
+            style={[
+              s.navBtnText,
+              safeSectionIndex === sectionPages.length - 1 && s.navBtnTextDisabled,
+            ]}
+          >
+            Next
+          </Text>
+          <Ionicons
+            name="chevron-forward"
+            size={20}
+            color={
+              safeSectionIndex === sectionPages.length - 1
+                ? colors.gray300
+                : colors.primary
+            }
+          />
+        </TouchableOpacity>
+      </View>
 
       {/* ── Contents modal ───────────────────────────────────────────── */}
       <NotesContentsModal
         visible={contentsVisible}
         sectionTitles={sectionTitles}
         sectionFirstPageIndexes={sectionFirstPageIndexes}
-        currentPageIndex={safePageIndex}
-        totalPages={pages.length}
+        currentPageIndex={safeSectionIndex}
+        totalPages={sectionPages.length}
         onJump={jumpTo}
         onClose={() => setContentsVisible(false)}
       />
@@ -629,12 +625,8 @@ const s = StyleSheet.create({
     paddingHorizontal: 12,
     minWidth: 88,
   },
+  navBtnRight: { justifyContent: 'flex-end' },
   navBtnDisabled: { opacity: 0.4 },
   navBtnText: { fontSize: 14, color: colors.primary, fontWeight: '600' },
   navBtnTextDisabled: { color: colors.gray300 },
-  readerToggleBtn: {
-    padding: 8,
-    borderRadius: 20,
-    backgroundColor: colors.surface,
-  },
 });

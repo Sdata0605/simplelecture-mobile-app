@@ -256,6 +256,61 @@ export function buildNotePages(
 }
 
 // ---------------------------------------------------------------------------
+// Section merging (one page per section)
+// ---------------------------------------------------------------------------
+
+/**
+ * Merge an already-built pages array back into ONE NotePage per section.
+ * Used by the reader to show a whole section on a single (vertically
+ * scrollable) screen. Prose chunks are re-joined with paragraph breaks;
+ * callouts/bullets/images/questions are collected across the section's pages.
+ */
+export function mergePagesIntoSectionPages(pages: NotePage[]): NotePage[] {
+  const bySection = new Map<string, NotePage>();
+  const order: string[] = [];
+
+  for (const page of pages) {
+    const existing = bySection.get(page.sectionId);
+    if (!existing) {
+      order.push(page.sectionId);
+      bySection.set(page.sectionId, {
+        ...page,
+        id: `${page.sectionId}-full`,
+        isFirstPageOfSection: true,
+        isLastPageOfSection: true,
+        pageInSection: 0,
+        totalPagesInSection: 1,
+        prose: page.prose,
+        callouts: [...page.callouts],
+        bullets: [...page.bullets],
+        images: [...page.images],
+        questions: {
+          important: [...page.questions.important],
+          practice: [...page.questions.practice],
+        },
+      });
+      continue;
+    }
+    if (page.prose) {
+      existing.prose = existing.prose
+        ? `${existing.prose}\n\n${page.prose}`
+        : page.prose;
+    }
+    existing.callouts.push(...page.callouts);
+    existing.bullets.push(...page.bullets);
+    existing.images.push(...page.images);
+    existing.questions.important.push(...page.questions.important);
+    existing.questions.practice.push(...page.questions.practice);
+  }
+
+  return order.map((id, sectionIndex) => {
+    const merged = bySection.get(id)!;
+    merged.sectionIndex = sectionIndex;
+    return merged;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Section index
 // ---------------------------------------------------------------------------
 
