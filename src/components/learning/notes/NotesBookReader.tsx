@@ -7,7 +7,7 @@
  * - Renders topic title, Contents button, Share button, page indicator, Prev/Next buttons
  * - Delegates page rendering to AnimatedBookPager
  * - Handles loading, empty, and error states
- * - Manages PDF generation via expo-print + expo-sharing (graceful fallback)
+ * - Manages PDF generation via expo-print + expo-sharing
  */
 
 import React, {
@@ -30,6 +30,8 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 
 import { useTopicNotes } from '../../../hooks/useTopicNotes';
 import { NotePage } from '../../../types/topicNotes';
@@ -56,34 +58,13 @@ function getLayoutMode(width: number): LayoutMode {
 }
 
 // ---------------------------------------------------------------------------
-// PDF generation (graceful: tries expo-print, falls back if unavailable)
+// PDF generation (expo-print creates the file, expo-sharing opens the sheet)
 // ---------------------------------------------------------------------------
 
 async function generateAndSharePdf(
   pages: NotePage[],
   topicTitle: string,
 ): Promise<void> {
-  // expo-print and expo-sharing are optional dependencies.
-  // We guard with try/require so Metro doesn't fail at bundle time.
-  let Print: any = null;
-  let Sharing: any = null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    Print = require('expo-print');
-  } catch (_) { /* not installed */ }
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    Sharing = require('expo-sharing');
-  } catch (_) { /* not installed */ }
-
-  if (!Print || !Sharing) {
-    Alert.alert(
-      'PDF Export Unavailable',
-      'PDF export requires expo-print and expo-sharing. Run:\n\nnpx expo install expo-print expo-sharing\n\nthen rebuild.',
-    );
-    return;
-  }
-
   try {
     const html = buildPrintHtml(pages, topicTitle);
     const { uri } = await Print.printToFileAsync({ html });
