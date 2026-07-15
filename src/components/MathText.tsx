@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, memo } from 'react';
 import { View, Text, StyleSheet, useWindowDimensions } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { colors, fontSize } from '../constants/theme';
+import { containsLatex, hasMathDelimiters, escapeHtml } from '../utils/latexFormat';
 
 interface MathTextProps {
   content: string;
@@ -14,33 +15,6 @@ interface MathTextProps {
   // for dedicated formula boxes, NOT for mixed prose that uses inline $...$.
   mathOnly?: boolean;
 }
-
-const containsLatex = (text: string): boolean => {
-  const latexPatterns = [
-    /\$\$.+?\$\$/s,
-    /\$.+?\$/,
-    /\\\(.+?\\\)/s,
-    /\\\[.+?\\\]/s,
-    /\\frac/,
-    /\\sqrt/,
-    /\\sum/,
-    /\\int/,
-    /\\ce\{/,
-    /\\alpha|\\beta|\\gamma|\\delta|\\theta|\\lambda|\\mu|\\sigma|\\omega/,
-    /\\times|\\div|\\pm|\\cdot|\\rightarrow|\\to/,
-    /\^{.+?}|_{.+?}/,
-    /\\text{/,
-    /\\mathbf|\\mathrm|\\mathit/,
-    /\\left|\\right/,
-    /\\begin|\\end/,
-  ];
-  return latexPatterns.some(pattern => pattern.test(text));
-};
-
-// Detects whether content already carries math delimiters that KaTeX
-// auto-render understands ($...$, $$...$$, \(...\), \[...\]).
-const hasMathDelimiters = (text: string): boolean =>
-  /\$.+?\$|\\\(.+?\\\)|\\\[.+?\\\]/s.test(text);
 
 function buildKatexHtml(bodyHtml: string, textColor: string): string {
   return `<!DOCTYPE html>
@@ -70,7 +44,7 @@ delimiters:[
 {left:"$",right:"$",display:false},
 {left:"\\\\[",right:"\\\\]",display:true},
 {left:"\\\\(",right:"\\\\)",display:false}
-],throwOnError:false,errorColor:"#cc0000",trust:true
+],throwOnError:false,errorColor:"#cc0000",trust:false
 });
 function s(){var h=document.body.scrollHeight;if(h>0)window.ReactNativeWebView.postMessage(h.toString());}
 setTimeout(s,100);setTimeout(s,300);setTimeout(s,600);setTimeout(s,1200);
@@ -78,10 +52,6 @@ setTimeout(s,100);setTimeout(s,300);setTimeout(s,600);setTimeout(s,1200);
 </script>
 </body>
 </html>`;
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
 }
 
 const MathText = memo(({ content, style, textStyle, color = colors.gray900, mathOnly = false }: MathTextProps) => {

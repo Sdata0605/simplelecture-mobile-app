@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
 import {
   View,
   Text,
@@ -14,8 +14,16 @@ import {
   Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase as supabaseService } from '../services/supabase';
+import { buildKatexHtml } from './MathText';
+import {
+  containsLatex,
+  convertMathpixToStandard,
+  doubtsMarkdownToHtml,
+  stripLatexToPlainText,
+} from '../utils/latexFormat';
 import DoubtThreadDrawer from './doubts/DoubtThreadDrawer';
 import {
   DoubtThread,
@@ -143,6 +151,92 @@ const AIMessageContent = ({ content }: { content: string }) => {
       })}
     </View>
   );
+};
+
+// Width the KaTeX WebView renders at: bubble max width minus its padding.
+const MATH_CONTENT_WIDTH = SCREEN_WIDTH * 0.92 - 28;
+
+/**
+ * Assistant bubble content for answers that contain LaTeX. Renders the whole
+ * message (markdown structure + math) in ONE KaTeX WebView, auto-sized to its
+ * content. Falls back to the native plain-text renderer (with LaTeX stripped)
+ * if the WebView never reports a height.
+ */
+const MathMessageContent = memo(({ content }: { content: string }) => {
+  const [height, setHeight] = useState(0);
+  const [timedOut, setTimedOut] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const html = useMemo(
+    () => buildKatexHtml(doubtsMarkdownToHtml(convertMathpixToStandard(content)), colors.text),
+    [content]
+  );
+
+  // Reset measurement whenever the rendered content changes (e.g. a reused
+  // component instance after a thread switch) so stale heights never leak.
+  useEffect(() => {
+    setHeight(0);
+    setTimedOut(false);
+    timerRef.current = setTimeout(() => setTimedOut(true), 4000);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [html]);
+
+  const onMessage = useCallback((event: any) => {
+    const h = parseInt(event.nativeEvent.data, 10);
+    if (h && h > 0) {
+      setHeight(h);
+      if (timerRef.current) clearTimeout(timerRef.current);
+    }
+  }, []);
+
+  if (timedOut && height <= 0) {
+    return <AIMessageContent content={stripLatexToPlainText(convertMathpixToStandard(content))} />;
+  }
+
+  return (
+    <View style={{ width: MATH_CONTENT_WIDTH, height: height > 0 ? height : 48, overflow: 'hidden' }}>
+      {height <= 0 && (
+        <View style={mathStyles.loading}>
+          <ActivityIndicator size="small" color={colors.primary} />
+        </View>
+      )}
+      <WebView
+        originWhitelist={['*']}
+        source={{ html }}
+        style={mathStyles.webView}
+        scrollEnabled={false}
+        nestedScrollEnabled={false}
+        showsHorizontalScrollIndicator={false}
+        showsVerticalScrollIndicator={false}
+        onMessage={onMessage}
+        javaScriptEnabled={true}
+        domStorageEnabled={true}
+        scalesPageToFit={false}
+        cacheEnabled={true}
+        startInLoadingState={false}
+        setSupportMultipleWindows={false}
+        onShouldStartLoadWithRequest={(request) =>
+          // Only the inline HTML document itself may load; block any
+          // navigation away (links, redirects) from untrusted AI content.
+          request.url === 'about:blank' || request.url.startsWith('data:')
+        }
+      />
+    </View>
+  );
+});
+
+/** Chooses the WebView math renderer only when the answer needs it. */
+const AssistantMessage = ({ content }: { content: string }) => {
+  const needsMath = useMemo(() => containsLatex(convertMathpixToStandard(content)), [content]);
+  return needsMath ? <MathMessageContent content={content} /> : <AIMessageContent content={content} />;
+};
+
+/** Suggestion chips are plain Text — clean any math noise for display only. */
+const chipLabel = (text: string) => {
+  const normalized = convertMathpixToStandard(text);
+  return containsLatex(normalized) ? stripLatexToPlainText(normalized) : text;
 };
 
 const TypingIndicator = () => {
@@ -462,7 +556,9 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
           keyboardShouldPersistTaps="handled"
         >
           {messages.map((msg, index) => (
-            <View key={index}>
+            // Scope keys to the thread so stateful math bubbles (WebView
+            // height measurement) never inherit state across thread switches.
+            <View key={`${activeThreadId ?? 'none'}:${index}`}>
               <View
                 style={[
                   styles.messageRow,
@@ -478,7 +574,7 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
                   {msg.role === 'user' ? (
                     <Text style={styles.userText}>{msg.content}</Text>
                   ) : (
-                    <AIMessageContent content={msg.content} />
+                    <AssistantMessage content={msg.content} />
                   )}
                 </View>
               </View>
@@ -496,7 +592,7 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
                         testID={`button-followup-${si}`}
                       >
                         <Ionicons name="sparkles-outline" size={13} color={colors.primary} />
-                        <Text style={styles.followupText}>{suggestion}</Text>
+                        <Text style={styles.followupText}>{chipLabel(suggestion)}</Text>
                       </TouchableOpacity>
                     ))}
                   </View>
@@ -552,6 +648,18 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
     </View>
   );
 }
+
+const mathStyles = StyleSheet.create({
+  loading: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  webView: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+});
 
 const mdStyles = StyleSheet.create({
   h1: { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 6, marginTop: 4 },
