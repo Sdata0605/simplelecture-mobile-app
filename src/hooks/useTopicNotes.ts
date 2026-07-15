@@ -88,10 +88,13 @@ function bucketQuestions(
     }
   });
 
-  // Cap each section: up to 2 important + up to 3 practice
+  // Cap each section: up to 2 important + up to 3 practice (verified first)
   for (const [key, qs] of map) {
     const important = qs.filter((q) => q.is_important).slice(0, 2);
-    const practice = qs.filter((q) => !q.is_important).slice(0, 3);
+    const practice = qs
+      .filter((q) => !q.is_important)
+      .sort((a, b) => Number(b.is_verified === true) - Number(a.is_verified === true))
+      .slice(0, 3);
     map.set(key, [...important, ...practice]);
   }
 

@@ -49,6 +49,10 @@ export interface NotesRawQuestion {
   explanation: string | null;
   options: Record<string, { text: string } | string> | null;
   correct_answer: string;
+  question_type: string | null;
+  question_format: string | null;
+  is_ai_generated: boolean | null;
+  is_verified: boolean | null;
 }
 
 export interface SubtopicRow {
@@ -114,7 +118,7 @@ export async function fetchTopicQuestions(
   const h = await authHeaders();
   const url =
     `${SUPABASE_URL}/rest/v1/questions` +
-    `?select=id,question_text,is_important,subtopic_id,difficulty,explanation,options,correct_answer` +
+    `?select=id,question_text,is_important,subtopic_id,difficulty,explanation,options,correct_answer,question_type,question_format,is_ai_generated,is_verified` +
     `&topic_id=eq.${encodeURIComponent(topicId)}` +
     `&order=created_at.asc` +
     `&limit=500`;

@@ -24,6 +24,7 @@ import { NotePage as NotePageType } from '../../../types/topicNotes';
 import { colors, spacing, borderRadius } from '../../../constants/theme';
 import MathText from '../../MathText';
 import { stripEmbeddedOptions } from '../../../utils/questionText';
+import { normalizeOptions, resolveCorrectAnswer } from '../../../utils/questionOptions';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -106,38 +107,99 @@ function QuestionCard({
   question: NotePageType['questions']['important'][0];
   isImportant: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [showAnswer, setShowAnswer] = useState(false);
   const questionText = stripEmbeddedOptions(
     question.question_text,
     question.options,
   );
+  const options = normalizeOptions(question.options);
+  const answerLabel = resolveCorrectAnswer(question.correct_answer, options);
+  const hasReveal = !!answerLabel || !!question.explanation;
+  const difficulty = (question.difficulty ?? '').trim();
+
   return (
-    <TouchableOpacity
-      activeOpacity={0.8}
-      style={[s.qCard, isImportant && s.qCardImportant]}
-      onPress={() => setExpanded((e) => !e)}
-      accessibilityLabel={questionText}
-    >
-      {isImportant && (
-        <View style={s.importantBadge}>
-          <Ionicons name="star" size={10} color="#fff" />
-          <Text style={s.importantBadgeText}>Important</Text>
+    <View style={[s.qCard, isImportant && s.qCardImportant]}>
+      <View style={s.qBadgeRow}>
+        {isImportant && (
+          <View style={s.importantBadge}>
+            <Ionicons name="star" size={10} color="#fff" />
+            <Text style={s.importantBadgeText}>Important</Text>
+          </View>
+        )}
+        {!!difficulty && (
+          <View style={s.metaChip}>
+            <Text style={s.metaChipText}>
+              {difficulty.charAt(0).toUpperCase() + difficulty.slice(1)}
+            </Text>
+          </View>
+        )}
+        {question.is_ai_generated === true && (
+          <View style={s.metaChip}>
+            <Text style={s.metaChipText}>AI</Text>
+          </View>
+        )}
+      </View>
+
+      <MathText content={questionText} textStyle={s.qText} color={colors.text} />
+
+      {options.length > 0 && (
+        <View style={s.qOptions}>
+          {options.map((opt) => (
+            <View key={opt.key} style={s.qOptionRow}>
+              <Text style={s.qOptionKey}>{opt.key}.</Text>
+              <MathText
+                content={opt.text}
+                style={s.qOptionContent}
+                textStyle={s.qOptionText}
+                color={colors.text}
+              />
+            </View>
+          ))}
         </View>
       )}
-      <MathText content={questionText} textStyle={s.qText} color={colors.text} />
-      {expanded && question.explanation ? (
-        <View style={s.qExplanationBox}>
-          <MathText
-            content={question.explanation}
-            textStyle={s.qExplanation}
-            color={colors.textSecondary}
+
+      {hasReveal && (
+        <TouchableOpacity
+          activeOpacity={0.7}
+          style={s.answerToggle}
+          onPress={() => setShowAnswer((v) => !v)}
+          accessibilityRole="button"
+          accessibilityLabel={showAnswer ? 'Hide answer' : 'Show answer'}
+        >
+          <Ionicons
+            name={showAnswer ? 'eye-off-outline' : 'eye-outline'}
+            size={13}
+            color={colors.primary}
           />
+          <Text style={s.answerToggleText}>
+            {showAnswer ? 'Hide answer' : 'Show answer'}
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {showAnswer && (
+        <View style={s.qExplanationBox}>
+          {!!answerLabel && (
+            <View style={s.answerRow}>
+              <Text style={s.answerLabel}>Answer: </Text>
+              <MathText
+                content={answerLabel}
+                style={s.answerContent}
+                textStyle={s.answerText}
+                color={colors.text}
+              />
+            </View>
+          )}
+          {!!question.explanation && (
+            <MathText
+              content={question.explanation}
+              textStyle={s.qExplanation}
+              color={colors.textSecondary}
+            />
+          )}
         </View>
-      ) : null}
-      {!expanded && question.explanation ? (
-        <Text style={s.qHint}>Tap for explanation</Text>
-      ) : null}
-    </TouchableOpacity>
+      )}
+    </View>
   );
 }
 
@@ -340,6 +402,12 @@ const s = StyleSheet.create({
     borderColor: '#FBBF24',
     backgroundColor: '#FFFBEB',
   },
+  qBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
   importantBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -352,7 +420,54 @@ const s = StyleSheet.create({
     gap: 3,
   },
   importantBadgeText: { fontSize: 9, fontWeight: '700', color: '#fff' },
+  metaChip: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginBottom: 6,
+  },
+  metaChipText: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
   qText: { fontSize: 13, color: colors.text, lineHeight: 20 },
+  qOptions: { marginTop: 6 },
+  qOptionRow: { flexDirection: 'row', marginBottom: 3, paddingRight: 8 },
+  qOptionKey: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    marginRight: 5,
+    lineHeight: 20,
+  },
+  qOptionContent: { flex: 1 },
+  qOptionText: { fontSize: 13, color: colors.text, lineHeight: 20 },
+  answerToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    gap: 4,
+    paddingVertical: 2,
+  },
+  answerToggleText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  answerRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 4 },
+  answerLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#059669',
+    lineHeight: 18,
+  },
+  answerContent: { flex: 1 },
+  answerText: { fontSize: 12, color: colors.text, lineHeight: 18, fontWeight: '600' },
   qExplanationBox: {
     marginTop: 6,
     paddingTop: 6,

@@ -46,6 +46,7 @@ import { NotePage as NotePageComponent } from './NotePage';
 import { colors, spacing } from '../../../constants/theme';
 import { sanitizePdfBaseName } from '../../../utils/pdfFileName';
 import { stripEmbeddedOptions } from '../../../utils/questionText';
+import { normalizeOptions, resolveCorrectAnswer } from '../../../utils/questionOptions';
 
 // ---------------------------------------------------------------------------
 // Layout helper
@@ -185,13 +186,28 @@ function buildPrintHtml(pages: NotePage[], title: string): string {
       const imagesHtml = page.images
         .map((img) => `<img src="${img.url}" style="max-width:100%;height:auto;margin:8px 0;" />`)
         .join('');
+      const questionHtml = (q: NotePage['questions']['important'][0], important: boolean) => {
+        const options = normalizeOptions(q.options);
+        const optionsHtml = options.length
+          ? `<ul class="q-options">${options
+              .map((o) => `<li><strong>${escapePrintHtml(o.key)}.</strong> ${escapePrintHtml(o.text)}</li>`)
+              .join('')}</ul>`
+          : '';
+        const answer = resolveCorrectAnswer(q.correct_answer, options);
+        const answerHtml = answer
+          ? `<p class="q-answer"><strong>Answer:</strong> ${escapePrintHtml(answer)}</p>`
+          : '';
+        const explanationHtml = q.explanation
+          ? `<p class="q-explanation">${escapePrintHtml(q.explanation)}</p>`
+          : '';
+        return `<div class="q${important ? ' important' : ''}">
+          <p>${important ? '★ ' : ''}${escapePrintHtml(stripEmbeddedOptions(q.question_text, q.options))}</p>
+          ${optionsHtml}${answerHtml}${explanationHtml}
+        </div>`;
+      };
       const qHtml = [
-        ...page.questions.important.map(
-          (q) => `<p class="q important">★ ${escapePrintHtml(stripEmbeddedOptions(q.question_text, q.options))}</p>`,
-        ),
-        ...page.questions.practice.map(
-          (q) => `<p class="q">${escapePrintHtml(stripEmbeddedOptions(q.question_text, q.options))}</p>`,
-        ),
+        ...page.questions.important.map((q) => questionHtml(q, true)),
+        ...page.questions.practice.map((q) => questionHtml(q, false)),
       ].join('');
       return `
         <div class="page">
@@ -227,6 +243,11 @@ function buildPrintHtml(pages: NotePage[], title: string): string {
       .callout-equation { border-color: #10B981; background: #ECFDF5; }
       .q { background: #F9FAFB; border: 1px solid #E5E7EB; padding: 8px; border-radius: 4px; margin-bottom: 6px; }
       .q.important { background: #FFFBEB; border-color: #FBBF24; }
+      .q p { margin-bottom: 4px; }
+      .q-options { margin: 0 0 4px 20px; list-style: none; padding: 0; }
+      .q-options li { line-height: 1.6; margin-bottom: 2px; }
+      .q-answer { color: #059669; margin-bottom: 2px; }
+      .q-explanation { color: #6B7280; font-size: 13px; margin-bottom: 0; }
       hr { border: none; border-top: 1px solid #E5E7EB; margin: 24px 0; }
       .page { margin-bottom: 24px; }
     </style>
