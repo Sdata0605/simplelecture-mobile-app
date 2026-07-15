@@ -7,6 +7,7 @@
 
 import { SUPABASE_URL, SUPABASE_ANON_KEY, getValidAccessToken } from './supabase';
 import { TopicNoteSection } from '../types/topicNotes';
+import { selectValidNotesJob } from '../utils/notesJobSelection';
 
 const BASE_HEADERS = {
   apikey: SUPABASE_ANON_KEY,
@@ -60,7 +61,16 @@ export interface SubtopicRow {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch the latest published+completed AI lecture job for a topic.
+ * How many recent published jobs to consider when picking the notes source.
+ * Occasionally the newest published job is an error stub with no sections,
+ * so we fetch a small window and pick the newest usable one.
+ */
+const NOTES_JOB_CANDIDATE_LIMIT = 5;
+
+/**
+ * Fetch the latest USABLE published+completed AI lecture job for a topic —
+ * the newest job whose presentation_json has a non-empty sections array.
+ * Error-stub jobs (e.g. {"error": "Server unreachable…"}) are skipped.
  *
  * Uses an inner join through ai_assistant_documents.topic_id so that only jobs
  * belonging to the requested topic are returned.
@@ -69,7 +79,7 @@ export interface SubtopicRow {
  *   video_generation_jobs
  *     JOIN ai_assistant_documents (inner) ON ai_assistant_documents.topic_id = :topicId
  *   WHERE is_published = true AND status = completed
- *   ORDER BY created_at DESC LIMIT 1
+ *   ORDER BY created_at DESC LIMIT 5
  */
 export async function fetchTopicNotesJob(
   topicId: string,
@@ -82,7 +92,7 @@ export async function fetchTopicNotesJob(
     `&is_published=eq.true` +
     `&status=eq.completed` +
     `&order=created_at.desc` +
-    `&limit=1`;
+    `&limit=${NOTES_JOB_CANDIDATE_LIMIT}`;
 
   const res = await fetch(url, { headers: h });
   if (!res.ok) return null;
@@ -90,7 +100,7 @@ export async function fetchTopicNotesJob(
   const data = await res.json().catch(() => null);
   if (!Array.isArray(data) || data.length === 0) return null;
 
-  return data[0] as TopicNotesJob;
+  return selectValidNotesJob(data as TopicNotesJob[]);
 }
 
 /**
