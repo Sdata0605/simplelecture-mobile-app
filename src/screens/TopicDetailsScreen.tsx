@@ -7867,7 +7867,7 @@ export default function TopicDetailsScreen() {
         )}
       </LinearGradient>
 
-      {activeTab === 'doubts' || activeTab === 'reels' || activeTab === 'ai' ? (
+      {activeTab === 'doubts' || activeTab === 'reels' || activeTab === 'ai' || activeTab === 'notes' ? (
         <View style={[styles.content, { flex: 1 }]}>
           {renderContent()}
         </View>
