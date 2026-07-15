@@ -45,7 +45,7 @@ import { NotesContentsModal } from './NotesContentsModal';
 import { NotePage as NotePageComponent } from './NotePage';
 import { colors, spacing } from '../../../constants/theme';
 import { sanitizePdfBaseName } from '../../../utils/pdfFileName';
-import { stripEmbeddedOptions } from '../../../utils/questionText';
+import { stripEmbeddedOptions, extractImageTokens } from '../../../utils/questionText';
 import { normalizeOptions, resolveCorrectAnswer } from '../../../utils/questionOptions';
 
 // ---------------------------------------------------------------------------
@@ -165,12 +165,14 @@ async function generateAndDownloadPdf(
   }
 }
 
-/** Escape note text for embedding in the print HTML. */
+/** Escape note text for embedding in the print HTML (element AND attribute safe). */
 function escapePrintHtml(text: string): string {
   return String(text ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function buildPrintHtml(pages: NotePage[], title: string): string {
@@ -186,23 +188,36 @@ function buildPrintHtml(pages: NotePage[], title: string): string {
       const imagesHtml = page.images
         .map((img) => `<img src="${img.url}" style="max-width:100%;height:auto;margin:8px 0;" />`)
         .join('');
+      // Valid http(s) image tokens become <img>; broken refs are dropped.
+      const imgTags = (urls: string[]) =>
+        urls
+          .map((u) => `<img src="${escapePrintHtml(u)}" class="q-img" onerror="this.style.display='none'" />`)
+          .join('');
       const questionHtml = (q: NotePage['questions']['important'][0], important: boolean) => {
-        const options = normalizeOptions(q.options);
+        const qParts = extractImageTokens(stripEmbeddedOptions(q.question_text, q.options));
+        const options = normalizeOptions(q.options).map((o) => ({
+          ...o,
+          ...extractImageTokens(o.text),
+        }));
         const optionsHtml = options.length
           ? `<ul class="q-options">${options
-              .map((o) => `<li><strong>${escapePrintHtml(o.key)}.</strong> ${escapePrintHtml(o.text)}</li>`)
+              .map((o) => `<li><strong>${escapePrintHtml(o.key)}.</strong> ${escapePrintHtml(o.text)}${imgTags(o.images)}</li>`)
               .join('')}</ul>`
           : '';
-        const answer = resolveCorrectAnswer(q.correct_answer, options);
-        const answerHtml = answer
-          ? `<p class="q-answer"><strong>Answer:</strong> ${escapePrintHtml(answer)}</p>`
+        const answerParts = extractImageTokens(
+          resolveCorrectAnswer(q.correct_answer, options.map((o) => ({ key: o.key, text: o.text }))),
+        );
+        const answerHtml = answerParts.text
+          ? `<p class="q-answer"><strong>Answer:</strong> ${escapePrintHtml(answerParts.text)}</p>`
           : '';
-        const explanationHtml = q.explanation
-          ? `<p class="q-explanation">${escapePrintHtml(q.explanation)}</p>`
+        const expParts = extractImageTokens(q.explanation);
+        const explanationHtml = expParts.text
+          ? `<p class="q-explanation">${escapePrintHtml(expParts.text)}</p>`
           : '';
         return `<div class="q${important ? ' important' : ''}">
-          <p>${important ? '★ ' : ''}${escapePrintHtml(stripEmbeddedOptions(q.question_text, q.options))}</p>
-          ${optionsHtml}${answerHtml}${explanationHtml}
+          ${qParts.text ? `<p>${important ? '★ ' : ''}${escapePrintHtml(qParts.text)}</p>` : ''}
+          ${imgTags(qParts.images)}
+          ${optionsHtml}${answerHtml}${imgTags(answerParts.images)}${explanationHtml}${imgTags(expParts.images)}
         </div>`;
       };
       const qHtml = [
@@ -248,6 +263,7 @@ function buildPrintHtml(pages: NotePage[], title: string): string {
       .q-options li { line-height: 1.6; margin-bottom: 2px; }
       .q-answer { color: #059669; margin-bottom: 2px; }
       .q-explanation { color: #6B7280; font-size: 13px; margin-bottom: 0; }
+      .q-img { display: block; max-width: 100%; height: auto; margin: 6px 0; }
       hr { border: none; border-top: 1px solid #E5E7EB; margin: 24px 0; }
       .page { margin-bottom: 24px; }
     </style>

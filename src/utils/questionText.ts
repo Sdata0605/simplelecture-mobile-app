@@ -84,3 +84,101 @@ export function stripEmbeddedOptions(text: string | null | undefined, options?: 
 
   return cleaned || text;
 }
+
+// ---------------------------------------------------------------------------
+// Markdown image tokens
+// ---------------------------------------------------------------------------
+
+export interface QuestionTextParts {
+  /** Text with ALL markdown image tokens removed (blank lines collapsed). */
+  text: string;
+  /** Renderable image URLs extracted from tokens (absolute http/https only). */
+  images: string[];
+}
+
+/** Pull the URL out of a markdown image target: `url`, `<url>`, or `url "title"`. */
+function targetToUrl(target: string): string {
+  let t = target.trim();
+  if (t.startsWith('<')) {
+    const end = t.indexOf('>');
+    t = end === -1 ? t.slice(1) : t.slice(1, end);
+  } else {
+    // Title (if any) starts at the first whitespace followed by a quote.
+    const m = t.match(/\s+["'(]/);
+    if (m && m.index !== undefined) t = t.slice(0, m.index);
+    else t = t.split(/\s+/)[0] ?? '';
+  }
+  return t.trim();
+}
+
+/**
+ * Remove markdown image tokens (`![alt](target)`) from question/option/
+ * explanation text. Tokens pointing at a real http(s) URL are returned in
+ * `images` so the caller can render the actual image; tokens with unusable
+ * targets (bare filenames like `aa80c…_img.jpg`, empty, relative paths) are
+ * silently dropped — the raw token text must never reach the screen.
+ *
+ * Uses a small scanner (not a regex) so it correctly handles:
+ * - URLs containing parentheses (nested-paren depth tracking)
+ * - tokens whose alt/target spans multiple lines
+ * - malformed, never-closed tokens (removed to end of line so raw markup
+ *   still cannot leak)
+ *
+ * Display-time only: never mutates stored data.
+ */
+export function extractImageTokens(text: string | null | undefined): QuestionTextParts {
+  const raw = text ?? '';
+  if (!raw || raw.indexOf('![') === -1) return { text: raw, images: [] };
+
+  const images: string[] = [];
+  let out = '';
+  let pos = 0;
+  let i = raw.indexOf('![');
+
+  while (i !== -1) {
+    out += raw.slice(pos, i);
+
+    const altEnd = raw.indexOf(']', i + 2);
+    if (altEnd === -1 || raw[altEnd + 1] !== '(') {
+      if (altEnd === -1) {
+        // "![" with no closing bracket at all — malformed; drop to end of line.
+        const lineEnd = raw.indexOf('\n', i);
+        pos = lineEnd === -1 ? raw.length : lineEnd + 1;
+      } else {
+        // "![alt]" without "(" — not an image token; keep it verbatim.
+        out += raw.slice(i, altEnd + 1);
+        pos = altEnd + 1;
+      }
+    } else {
+      // Scan the target with paren-depth tracking (URLs may contain parens).
+      let depth = 1;
+      let j = altEnd + 2;
+      while (j < raw.length && depth > 0) {
+        if (raw[j] === '(') depth++;
+        else if (raw[j] === ')') depth--;
+        j++;
+      }
+      if (depth === 0) {
+        const url = targetToUrl(raw.slice(altEnd + 2, j - 1));
+        if (/^https?:\/\//i.test(url)) images.push(url);
+        pos = j;
+      } else {
+        // Never-closed "](" — malformed; drop to end of line so it can't leak.
+        const lineEnd = raw.indexOf('\n', i);
+        pos = lineEnd === -1 ? raw.length : lineEnd + 1;
+      }
+    }
+
+    i = raw.indexOf('![', pos);
+  }
+  out += raw.slice(pos);
+
+  const cleaned = out
+    // Tidy leftovers: stray spaces around removals, then runs of blank lines.
+    .replace(/[ \t]+$/gm, '')
+    .replace(/^[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return { text: cleaned, images };
+}

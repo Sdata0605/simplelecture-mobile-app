@@ -23,7 +23,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { NotePage as NotePageType } from '../../../types/topicNotes';
 import { colors, spacing, borderRadius } from '../../../constants/theme';
 import MathText from '../../MathText';
-import { stripEmbeddedOptions } from '../../../utils/questionText';
+import { stripEmbeddedOptions, extractImageTokens } from '../../../utils/questionText';
 import { normalizeOptions, resolveCorrectAnswer } from '../../../utils/questionOptions';
 
 // ---------------------------------------------------------------------------
@@ -108,13 +108,30 @@ function QuestionCard({
   isImportant: boolean;
 }) {
   const [showAnswer, setShowAnswer] = useState(false);
-  const questionText = stripEmbeddedOptions(
-    question.question_text,
-    question.options,
+  // Strip duplicated inline options, then pull out markdown image tokens:
+  // broken refs (bare filenames) vanish; real http(s) URLs render as images.
+  const qParts = extractImageTokens(
+    stripEmbeddedOptions(question.question_text, question.options),
   );
-  const options = normalizeOptions(question.options);
-  const answerLabel = resolveCorrectAnswer(question.correct_answer, options);
-  const hasReveal = !!answerLabel || !!question.explanation;
+  const questionText = qParts.text;
+  const options = normalizeOptions(question.options).map((opt) => ({
+    ...opt,
+    ...extractImageTokens(opt.text),
+  }));
+  // correct_answer can also carry image tokens when it's free text.
+  const answerParts = extractImageTokens(
+    resolveCorrectAnswer(
+      question.correct_answer,
+      options.map((o) => ({ key: o.key, text: o.text })),
+    ),
+  );
+  const answerLabel = answerParts.text;
+  const explanationParts = extractImageTokens(question.explanation);
+  const hasReveal =
+    !!answerLabel ||
+    answerParts.images.length > 0 ||
+    !!explanationParts.text ||
+    explanationParts.images.length > 0;
   const difficulty = (question.difficulty ?? '').trim();
 
   return (
@@ -140,19 +157,30 @@ function QuestionCard({
         )}
       </View>
 
-      <MathText content={questionText} textStyle={s.qText} color={colors.text} />
+      {!!questionText && (
+        <MathText content={questionText} textStyle={s.qText} color={colors.text} />
+      )}
+      {qParts.images.map((url, i) => (
+        <NoteImage key={`qimg-${i}`} url={url} />
+      ))}
 
       {options.length > 0 && (
         <View style={s.qOptions}>
           {options.map((opt) => (
             <View key={opt.key} style={s.qOptionRow}>
               <Text style={s.qOptionKey}>{opt.key}.</Text>
-              <MathText
-                content={opt.text}
-                style={s.qOptionContent}
-                textStyle={s.qOptionText}
-                color={colors.text}
-              />
+              <View style={s.qOptionContent}>
+                {!!opt.text && (
+                  <MathText
+                    content={opt.text}
+                    textStyle={s.qOptionText}
+                    color={colors.text}
+                  />
+                )}
+                {opt.images.map((url, i) => (
+                  <NoteImage key={`optimg-${opt.key}-${i}`} url={url} />
+                ))}
+              </View>
             </View>
           ))}
         </View>
@@ -190,13 +218,19 @@ function QuestionCard({
               />
             </View>
           )}
-          {!!question.explanation && (
+          {answerParts.images.map((url, i) => (
+            <NoteImage key={`ansimg-${i}`} url={url} />
+          ))}
+          {!!explanationParts.text && (
             <MathText
-              content={question.explanation}
+              content={explanationParts.text}
               textStyle={s.qExplanation}
               color={colors.textSecondary}
             />
           )}
+          {explanationParts.images.map((url, i) => (
+            <NoteImage key={`expimg-${i}`} url={url} />
+          ))}
         </View>
       )}
     </View>
