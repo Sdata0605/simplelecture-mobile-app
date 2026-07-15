@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,17 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase as supabaseService } from '../services/supabase';
+import DoubtThreadDrawer from './doubts/DoubtThreadDrawer';
+import {
+  DoubtThread,
+  DoubtStoredMessage,
+  createThread,
+  deriveTitle,
+  loadThreads,
+  saveThreads,
+  sortThreads,
+  mergeSuggestions,
+} from '../utils/doubtThreads';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -154,12 +165,72 @@ const TypingIndicator = () => {
 const INPUT_BAR_HEIGHT = 56;
 
 export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeSend }: DoubtsTabProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [threads, setThreads] = useState<DoubtThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [drawerVisible, setDrawerVisible] = useState(false);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const scrollViewRef = useRef<ScrollView>(null);
   const insets = useSafeAreaInsets();
+  // Guards against a slow load for a previous subject clobbering the current one.
+  const subjectRef = useRef(subjectId);
+  subjectRef.current = subjectId;
+
+  // Rehydrate threads whenever the subject changes; select the most recent.
+  useEffect(() => {
+    let cancelled = false;
+    setThreads([]);
+    setActiveThreadId(null);
+    setInputText('');
+    setDrawerVisible(false);
+    if (!subjectId) return;
+    (async () => {
+      const loaded = await loadThreads(subjectId);
+      if (cancelled || subjectRef.current !== subjectId) return;
+      setThreads(loaded);
+      setActiveThreadId(loaded.length > 0 ? loaded[0].id : null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [subjectId]);
+
+  const activeThread = useMemo(
+    () => threads.find((t) => t.id === activeThreadId) ?? null,
+    [threads, activeThreadId]
+  );
+  const messages: ChatMessage[] = activeThread?.messages ?? [];
+
+  /** Update thread state and persist in one step. */
+  const commitThreads = (next: DoubtThread[]) => {
+    const sorted = sortThreads(next);
+    setThreads(sorted);
+    saveThreads(subjectId, sorted);
+    return sorted;
+  };
+
+  const handleNewThread = () => {
+    const thread = createThread();
+    commitThreads([thread, ...threads]);
+    setActiveThreadId(thread.id);
+    setDrawerVisible(false);
+    setInputText('');
+  };
+
+  const handleSelectThread = (threadId: string) => {
+    setActiveThreadId(threadId);
+    setDrawerVisible(false);
+    scrollToBottom();
+  };
+
+  const handleDeleteThread = (threadId: string) => {
+    const remaining = threads.filter((t) => t.id !== threadId);
+    const sorted = commitThreads(remaining);
+    if (activeThreadId === threadId) {
+      setActiveThreadId(sorted.length > 0 ? sorted[0].id : null);
+    }
+  };
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -199,46 +270,110 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
       if (!allowed) return;
     }
 
-    // Snapshot the conversation before any optimistic change so we can fully
-    // roll back (including previously visible suggestion chips) on failure.
-    const prevMessages = messages;
+    // Snapshot everything before any optimistic change so we can fully roll
+    // back (thread list, titles, chips) on failure — including persistence.
+    const prevThreads = threads;
+    const prevActiveId = activeThreadId;
+    // Bind this request to the subject it was sent for. If the user switches
+    // subjects while the request is in flight, the late completion must only
+    // touch the OLD subject's storage — never the new subject's UI state.
+    const sendSubjectId = subjectId;
+    const isCurrentSubject = () => subjectRef.current === sendSubjectId;
+
+    // Send into the active thread, or create one on the fly (fresh install /
+    // all threads deleted).
+    const now = Date.now();
+    const target: DoubtThread = activeThread ?? createThread(now);
     // Prior history only — the server appends the new question itself.
-    const history = prevMessages.map(m => ({ role: m.role, content: m.content }));
-    const userMessage: ChatMessage = { role: 'user', content: question };
-    // Optimistically add the user bubble and clear suggestion chips from
-    // any earlier assistant replies (only the newest reply shows chips).
-    setMessages([...prevMessages.map(m => ({ ...m, suggestions: undefined })), userMessage]);
+    const history = target.messages.map((m) => ({ role: m.role, content: m.content }));
+    const userMessage: DoubtStoredMessage = { role: 'user', content: question };
+    // Optimistically add the user bubble and clear suggestion chips from any
+    // earlier assistant replies (only the newest reply shows chips).
+    const optimisticMessages = [
+      ...target.messages.map((m) => ({ ...m, suggestions: undefined })),
+      userMessage,
+    ];
+    const optimisticThread: DoubtThread = {
+      ...target,
+      messages: optimisticMessages,
+      title: deriveTitle(target.title, optimisticMessages),
+      updatedAt: now,
+    };
+    const withoutTarget = prevThreads.filter((t) => t.id !== target.id);
+    commitThreads([optimisticThread, ...withoutTarget]);
+    if (activeThreadId !== target.id) setActiveThreadId(target.id);
     setInputText('');
     setIsLoading(true);
     scrollToBottom();
 
+    const rollback = () => {
+      if (isCurrentSubject()) {
+        commitThreads(prevThreads);
+        setActiveThreadId(prevActiveId);
+        setInputText(question);
+      } else {
+        // Subject changed mid-flight: undo the optimistic write in the old
+        // subject's storage only; leave the current subject's UI untouched.
+        saveThreads(sendSubjectId, prevThreads);
+      }
+    };
+
     try {
-      const result = await supabaseService.askDoubt({
-        question,
-        subjectId,
-        messages: history,
-        studentId,
-      });
+      // AI answer and DB similar-question matches run in parallel; the RPC is
+      // best-effort and never blocks or fails the answer path.
+      const [result, dbMatches] = await Promise.all([
+        supabaseService.askDoubt({
+          question,
+          subjectId,
+          messages: history,
+          studentId,
+        }),
+        supabaseService.findSimilarQuestions(question, subjectId),
+      ]);
 
       if (result.success && result.answer) {
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: result.answer!,
-            suggestions: result.suggestions && result.suggestions.length > 0 ? result.suggestions : undefined,
-          },
-        ]);
+        const merged = mergeSuggestions(dbMatches, result.suggestions || [], 6);
+        const assistantMessage: DoubtStoredMessage = {
+          role: 'assistant',
+          content: result.answer,
+          suggestions: merged.length > 0 ? merged : undefined,
+        };
+        if (isCurrentSubject()) {
+          setThreads((current) => {
+            const next = current.map((t) =>
+              t.id === target.id
+                ? { ...t, messages: [...t.messages, assistantMessage], updatedAt: Date.now() }
+                : t
+            );
+            const sorted = sortThreads(next);
+            saveThreads(sendSubjectId, sorted);
+            return sorted;
+          });
+        } else {
+          // Subject changed mid-flight: append the answer to the old
+          // subject's storage only, so it's there when the user returns.
+          const stored = await loadThreads(sendSubjectId);
+          await saveThreads(
+            sendSubjectId,
+            stored.map((t) =>
+              t.id === target.id
+                ? { ...t, messages: [...t.messages, assistantMessage], updatedAt: Date.now() }
+                : t
+            )
+          );
+        }
       } else {
         // Roll back to the pre-send conversation (restores prior chips) and text.
-        setMessages(prevMessages);
-        setInputText(question);
-        Alert.alert('Error', result.error || 'Could not get a response. Please try again.');
+        rollback();
+        if (isCurrentSubject()) {
+          Alert.alert('Error', result.error || 'Could not get a response. Please try again.');
+        }
       }
     } catch {
-      setMessages(prevMessages);
-      setInputText(question);
-      Alert.alert('Error', 'Something went wrong. Please try again.');
+      rollback();
+      if (isCurrentSubject()) {
+        Alert.alert('Error', 'Something went wrong. Please try again.');
+      }
     } finally {
       setIsLoading(false);
       scrollToBottom();
@@ -264,6 +399,29 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
 
   return (
     <View style={styles.container}>
+      <View style={styles.threadHeader}>
+        <TouchableOpacity
+          style={styles.historyButton}
+          onPress={() => setDrawerVisible(true)}
+          accessibilityLabel="Open doubt history"
+          testID="button-open-history"
+        >
+          <Ionicons name="time-outline" size={17} color={colors.primary} />
+          <Text style={styles.historyButtonText}>History</Text>
+        </TouchableOpacity>
+        <Text style={styles.threadHeaderTitle} numberOfLines={1}>
+          {activeThread ? activeThread.title : 'New doubt'}
+        </Text>
+        <TouchableOpacity
+          style={styles.headerNewButton}
+          onPress={handleNewThread}
+          accessibilityLabel="Start a new doubt"
+          testID="button-header-new-doubt"
+        >
+          <Ionicons name="add" size={20} color={colors.primary} />
+        </TouchableOpacity>
+      </View>
+
       {messages.length === 0 ? (
         <ScrollView
           style={styles.messagesContainer}
@@ -381,6 +539,16 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
           </TouchableOpacity>
         </View>
       </View>
+
+      <DoubtThreadDrawer
+        visible={drawerVisible}
+        threads={threads}
+        activeThreadId={activeThreadId}
+        onClose={() => setDrawerVisible(false)}
+        onSelectThread={handleSelectThread}
+        onNewThread={handleNewThread}
+        onDeleteThread={handleDeleteThread}
+      />
     </View>
   );
 }
@@ -400,6 +568,45 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  threadHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.white,
+  },
+  historyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.primaryLight,
+    borderRadius: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  historyButtonText: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  threadHeaderTitle: {
+    flex: 1,
+    fontSize: 13.5,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  headerNewButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   emptyState: {
     flex: 1,

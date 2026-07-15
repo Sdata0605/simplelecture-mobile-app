@@ -2326,10 +2326,53 @@ class SupabaseService {
       return {
         success: true,
         answer: data.answer,
-        suggestions: Array.isArray(data.suggestions) ? data.suggestions.slice(0, 3) : [],
+        // Server may return plain strings or { text } objects; normalize to
+        // strings. Cap at 6 (final merge with DB matches also caps at 6).
+        suggestions: Array.isArray(data.suggestions)
+          ? data.suggestions
+              .map((s: any) => (typeof s === 'string' ? s : s?.text))
+              .filter((s: any): s is string => typeof s === 'string' && !!s.trim())
+              .slice(0, 6)
+          : [],
       };
     } catch (error) {
       return { success: false, error: 'Network error. Please try again.' };
+    }
+  }
+
+  /**
+   * Similar-question matches from the DB, used to enrich the doubt chat's
+   * follow-up chips. Best-effort: any failure yields an empty list so the
+   * main AI answer path is never blocked.
+   */
+  async findSimilarQuestions(text: string, subjectId: string, limit: number = 6): Promise<string[]> {
+    try {
+      const accessToken = await this.getAccessToken();
+      const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/find_similar_questions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken || SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({
+          p_text: text,
+          p_subject_id: subjectId,
+          p_topic_id: null,
+          p_limit: limit,
+        }),
+      });
+      if (!response.ok) return [];
+      const rows = await response.json();
+      if (!Array.isArray(rows)) return [];
+      return rows
+        .map((r: any) =>
+          typeof r === 'string' ? r : r?.question_text || r?.text || r?.question || null
+        )
+        .filter((s: any): s is string => typeof s === 'string' && !!s.trim())
+        .slice(0, limit);
+    } catch {
+      return [];
     }
   }
 
