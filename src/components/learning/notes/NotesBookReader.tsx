@@ -32,6 +32,7 @@ import {
   Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
@@ -309,6 +310,7 @@ export function NotesBookReader({
   const [pdfLoading, setPdfLoading] = useState(false);
   const { width } = Dimensions.get('window');
   const layoutMode = getLayoutMode(width);
+  const insets = useSafeAreaInsets();
 
   const {
     loading,
@@ -489,7 +491,9 @@ export function NotesBookReader({
       </View>
 
       {/* ── Prev / Next below the note card ─────────────────────────── */}
-      <View style={s.navBar}>
+      {/* Safe-area bottom inset keeps the bar above the system nav buttons
+          even when Android re-lays the window edge-to-edge on resume. */}
+      <View style={[s.navBar, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
         <TouchableOpacity
           style={[s.navBtn, safeSectionIndex === 0 && s.navBtnDisabled]}
           onPress={goPrev}
