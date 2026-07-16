@@ -7,7 +7,8 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio, Video, ResizeMode } from 'expo-av';
+import { Audio, Video, ResizeMode, VideoFullscreenUpdate } from 'expo-av';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../navigation/AppNavigator';
@@ -107,6 +108,38 @@ export default function MarketingLecturePlayerScreen() {
     navigation.goBack();
   }, [navigation]);
 
+  // Rotate to landscape while the native fullscreen is presented, back to
+  // portrait when dismissed — same pattern as the AI Lecture Player.
+  const handleFullscreenUpdate = useCallback(
+    ({ fullscreenUpdate }: { fullscreenUpdate: VideoFullscreenUpdate }) => {
+      if (fullscreenUpdate === VideoFullscreenUpdate.PLAYER_DID_PRESENT) {
+        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
+      } else if (fullscreenUpdate === VideoFullscreenUpdate.PLAYER_WILL_DISMISS) {
+        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+          .then(() => {
+            setTimeout(() => {
+              ScreenOrientation.unlockAsync().catch(() => {});
+            }, 300);
+          })
+          .catch(() => {});
+      }
+    },
+    [],
+  );
+
+  // Safety: never leave the app stuck in landscape after this screen closes.
+  useEffect(() => {
+    return () => {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+        .then(() => {
+          setTimeout(() => {
+            ScreenOrientation.unlockAsync().catch(() => {});
+          }, 300);
+        })
+        .catch(() => {});
+    };
+  }, []);
+
   return (
     <View style={styles.container}>
       {/* Top bar: close + title */}
@@ -188,6 +221,7 @@ export default function MarketingLecturePlayerScreen() {
             resizeMode={ResizeMode.CONTAIN}
             shouldPlay
             useNativeControls
+            onFullscreenUpdate={handleFullscreenUpdate}
             onError={(e) => {
               console.warn('[MarketingLecturePlayer] Playback error:', e);
               setError('Could not play this video. Please try again later.');
