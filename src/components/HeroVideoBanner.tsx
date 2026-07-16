@@ -1,6 +1,6 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
+import { Audio, Video, ResizeMode } from 'expo-av';
 import { useIsFocused, useFocusEffect } from '@react-navigation/native';
 import { HOMEPAGE_HERO_LECTURE } from '../lib/homepageHeroLecture';
 
@@ -17,6 +17,18 @@ const CARD_H = Math.max(Math.round((CARD_W * 9) / 16), CARD_MIN_H);
 export default function HeroVideoBanner() {
   const videoRef = useRef<Video>(null);
   const isFocused = useIsFocused();
+
+  // Make the video's audio actually audible: without this, iOS keeps media
+  // silent when the ringer switch is on silent. Same audio mode the AI
+  // narration player uses, so behavior stays consistent app-wide.
+  useEffect(() => {
+    Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+    }).catch(() => {});
+  }, []);
 
   // Pause when screen loses focus; resume when it regains focus.
   // This also satisfies the "release when not visible" requirement —
@@ -50,7 +62,6 @@ export default function HeroVideoBanner() {
           style={styles.video}
           resizeMode={ResizeMode.CONTAIN}
           shouldPlay={isFocused}
-          isMuted
           isLooping
           useNativeControls
         />
