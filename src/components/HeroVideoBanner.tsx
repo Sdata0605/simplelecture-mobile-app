@@ -7,7 +7,12 @@ import { HOMEPAGE_HERO_LECTURE } from '../lib/homepageHeroLecture';
 const { width: SCREEN_W } = Dimensions.get('window');
 const CARD_H_MARGIN = 16; // horizontal margin on each side
 const CARD_W = SCREEN_W - CARD_H_MARGIN * 2;
-const CARD_H = Math.round((CARD_W * 9) / 16); // strict 16:9
+// 16:9 height, but never smaller than the minimum card height. Using a single
+// explicit height (instead of height + a larger minHeight) keeps the laid-out
+// height in sync with what the video actually occupies, so following sections
+// are positioned below the real bottom of the card.
+const CARD_MIN_H = 270;
+const CARD_H = Math.max(Math.round((CARD_W * 9) / 16), CARD_MIN_H);
 
 export default function HeroVideoBanner() {
   const videoRef = useRef<Video>(null);
@@ -58,7 +63,7 @@ const styles = StyleSheet.create({
   container: {
     width: SCREEN_W,
     alignItems: 'center',
-    marginTop: 32,
+    marginTop: 16,
     marginBottom: 24,
     // Bring the shadow into view on Android
     paddingHorizontal: CARD_H_MARGIN,
@@ -66,7 +71,6 @@ const styles = StyleSheet.create({
   card: {
     width: CARD_W,
     height: CARD_H,
-    minHeight: 270,
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: '#000',
