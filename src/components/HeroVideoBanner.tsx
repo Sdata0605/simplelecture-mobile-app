@@ -59,7 +59,7 @@ const styles = StyleSheet.create({
     width: SCREEN_W,
     alignItems: 'center',
     marginTop: 32,
-    marginBottom: 4,
+    marginBottom: 24,
     // Bring the shadow into view on Android
     paddingHorizontal: CARD_H_MARGIN,
   },
