@@ -3089,15 +3089,10 @@ export default function TopicDetailsScreen() {
         const jobId = video.external_job_id;
         if (jobId) {
           if (video.is_marketing === true) {
-            console.log('[TopicDetails] Marketing lecture — routing to V4 player, jobId:', jobId);
-            navigation.navigate('V4Player', {
+            console.log('[TopicDetails] Marketing lecture — routing to Marketing player, jobId:', jobId);
+            navigation.navigate('MarketingLecturePlayer', {
               jobId,
-              topicId: topicId || undefined,
-              chapterId: routeChapterId || topic?.chapter_id || undefined,
-              subjectId: subjectId || undefined,
-              courseId: languageCourseId || undefined,
-              topicTitle: video.title || topic?.title || 'AI Lecture',
-              isPreview: false,
+              title: video.title || topic?.title || 'Lecture',
             });
             return;
           }

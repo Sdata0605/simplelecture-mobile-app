@@ -49,6 +49,7 @@ import BlogListScreen from '../screens/BlogListScreen';
 import BlogDetailScreen from '../screens/BlogDetailScreen';
 import V3PlayerScreen from '../screens/V3PlayerScreen';
 import V4PlayerScreen from '../screens/V4PlayerScreen';
+import MarketingLecturePlayerScreen from '../screens/MarketingLecturePlayerScreen';
 import MyRewardsScreen from '../screens/MyRewardsScreen';
 import CoursePreviewScreen from '../screens/CoursePreviewScreen';
 import StudyTimetableScreen from '../screens/StudyTimetableScreen';
@@ -130,6 +131,11 @@ export type RootStackParamList = {
     subjectId?: string;
     courseId?: string;
     topicTitle?: string;
+  };
+  MarketingLecturePlayer: {
+    jobId: string;
+    title: string;
+    subtitle?: string;
   };
   V4Player: {
     jobId: string;
@@ -241,6 +247,7 @@ export default function AppNavigator() {
         <Stack.Screen name="BlogDetail" component={BlogDetailScreen} />
         <Stack.Screen name="V3Player" component={V3PlayerScreen} />
         <Stack.Screen name="V4Player" component={V4PlayerScreen} />
+        <Stack.Screen name="MarketingLecturePlayer" component={MarketingLecturePlayerScreen} />
         <Stack.Screen name="MyRewards" component={MyRewardsScreen} />
         <Stack.Screen name="CoursePreview" component={CoursePreviewScreen} />
         <Stack.Screen name="StudyTimetable" component={StudyTimetableScreen} />

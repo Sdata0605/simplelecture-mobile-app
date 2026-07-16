@@ -142,13 +142,9 @@ function ClassesTabContent({ topicId, chapterId, topicVideoId, topicVideoPlatfor
     // external_job_id is the required identifier for both.
     if (lec.external_job_id) {
       if (lec.is_marketing === true) {
-        (navigation.navigate as any)('V4Player', {
+        (navigation.navigate as any)('MarketingLecturePlayer', {
           jobId: lec.external_job_id,
-          topicId,
-          chapterId,
-          courseId,
-          topicTitle: lec.document_name || topicTitle,
-          isPreview: true,
+          title: lec.document_name || topicTitle,
         });
         return;
       }
