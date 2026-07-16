@@ -1,5 +1,6 @@
-import { useRef, useCallback, useEffect } from 'react';
-import { View, StyleSheet, Dimensions } from 'react-native';
+import { useRef, useCallback, useEffect, useState } from 'react';
+import { View, StyleSheet, Dimensions, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { Audio, Video, ResizeMode } from 'expo-av';
 import { useIsFocused, useFocusEffect } from '@react-navigation/native';
 import { HOMEPAGE_HERO_LECTURE } from '../lib/homepageHeroLecture';
@@ -17,6 +18,7 @@ const CARD_H = Math.max(Math.round((CARD_W * 9) / 16), CARD_MIN_H);
 export default function HeroVideoBanner() {
   const videoRef = useRef<Video>(null);
   const isFocused = useIsFocused();
+  const [isMuted, setIsMuted] = useState(true);
 
   // Make the video's audio actually audible: without this, iOS keeps media
   // silent when the ringer switch is on silent. Same audio mode the AI
@@ -62,9 +64,23 @@ export default function HeroVideoBanner() {
           style={styles.video}
           resizeMode={ResizeMode.CONTAIN}
           shouldPlay={isFocused}
+          isMuted={isMuted}
           isLooping
           useNativeControls
         />
+        <TouchableOpacity
+          style={styles.muteButton}
+          onPress={() => setIsMuted((m) => !m)}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityLabel={isMuted ? 'Unmute video' : 'Mute video'}
+          data-testid="button-toggle-mute"
+        >
+          <Ionicons
+            name={isMuted ? 'volume-mute' : 'volume-high'}
+            size={18}
+            color="#FFFFFF"
+          />
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -94,6 +110,18 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.45,
     shadowRadius: 10,
+  },
+  muteButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
   },
   video: {
     width: '100%',
