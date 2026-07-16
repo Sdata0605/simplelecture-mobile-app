@@ -3081,27 +3081,39 @@ export default function TopicDetailsScreen() {
       return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    // Handle video click — V4 player for all AI lectures with external_job_id
+    // Handle video click — marketing AI lectures use the V4 player,
+    // normal (non-marketing) AI lectures use the AI Lecture Player.
     const handleVideoPress = (video: TopicVideo) => {
       if (video.video_platform === 'ai_generated') {
-        // V4 path: use external_job_id (the stable V4 identifier).
-        // No course-ID gate — V4 is open to all courses.
+        // external_job_id is the stable identifier for both players.
         const jobId = video.external_job_id;
         if (jobId) {
-          console.log('[TopicDetails] Routing to V4 player, jobId:', jobId);
-          navigation.navigate('V4Player', {
+          if (video.is_marketing === true) {
+            console.log('[TopicDetails] Marketing lecture — routing to V4 player, jobId:', jobId);
+            navigation.navigate('V4Player', {
+              jobId,
+              topicId: topicId || undefined,
+              chapterId: routeChapterId || topic?.chapter_id || undefined,
+              subjectId: subjectId || undefined,
+              courseId: languageCourseId || undefined,
+              topicTitle: video.title || topic?.title || 'AI Lecture',
+              isPreview: false,
+            });
+            return;
+          }
+          console.log('[TopicDetails] Normal lecture — routing to AI Lecture Player, jobId:', jobId);
+          navigation.navigate('AILecturePlayer', {
             jobId,
             topicId: topicId || undefined,
             chapterId: routeChapterId || topic?.chapter_id || undefined,
             subjectId: subjectId || undefined,
             courseId: languageCourseId || undefined,
             topicTitle: video.title || topic?.title || 'AI Lecture',
-            isPreview: false,
           });
           return;
         }
 
-        // No external_job_id — content is not available via V4
+        // No external_job_id — content is not available
         console.warn('[TopicDetails] AI lecture has no external_job_id — content unavailable');
         Alert.alert(
           'Content Unavailable',

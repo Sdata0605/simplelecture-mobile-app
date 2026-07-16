@@ -138,15 +138,26 @@ function ClassesTabContent({ topicId, chapterId, topicVideoId, topicVideoPlatfor
       onBuy();
       return;
     }
-    // V4 is the only supported player. external_job_id is the required identifier.
+    // Marketing lectures use the V4 player; normal lectures use the AI Lecture Player.
+    // external_job_id is the required identifier for both.
     if (lec.external_job_id) {
-      (navigation.navigate as any)('V4Player', {
+      if (lec.is_marketing === true) {
+        (navigation.navigate as any)('V4Player', {
+          jobId: lec.external_job_id,
+          topicId,
+          chapterId,
+          courseId,
+          topicTitle: lec.document_name || topicTitle,
+          isPreview: true,
+        });
+        return;
+      }
+      (navigation.navigate as any)('AILecturePlayer', {
         jobId: lec.external_job_id,
         topicId,
         chapterId,
         courseId,
         topicTitle: lec.document_name || topicTitle,
-        isPreview: true,
       });
       return;
     }
