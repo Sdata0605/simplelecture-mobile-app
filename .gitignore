@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+android_keystore.jks
+android_keystore_OLD_lost_password.jks.bak
+.keystore_password.txt
+credentials.json
