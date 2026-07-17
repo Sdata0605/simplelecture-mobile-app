@@ -145,6 +145,8 @@ function ClassesTabContent({ topicId, chapterId, topicVideoId, topicVideoPlatfor
         (navigation.navigate as any)('MarketingLecturePlayer', {
           jobId: lec.external_job_id,
           title: lec.document_name || topicTitle,
+          // Preview cards have no language picker — start deterministically in English.
+          initialLanguage: 'english',
         });
         return;
       }

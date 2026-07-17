@@ -47,7 +47,7 @@ const PRIMARY = '#2BBD6E';
 export default function MarketingLecturePlayerScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<RootStackParamList, 'MarketingLecturePlayer'>>();
-  const { jobId, title, subtitle, topicId } = route.params;
+  const { jobId, title, subtitle, topicId, initialLanguage } = route.params;
   const insets = useSafeAreaInsets();
 
   // Quick actions only make sense when we came from Topic Details.
@@ -80,10 +80,19 @@ export default function MarketingLecturePlayerScreen() {
         setError(null);
         const pres = await fetchV4Presentation(jobId);
         if (cancelled) return;
-        // Prefer English, fall back to Kannada if that's the only one available.
-        const initialLang: PlayerLanguage = resolvePlaybackUrl(pres, 'english')
-          ? 'english'
-          : 'kannada';
+        // Honor the language chosen on the card if that version exists;
+        // otherwise prefer English, falling back to Kannada if that's the
+        // only one available.
+        const requested: PlayerLanguage | null =
+          initialLanguage === 'kannada' || initialLanguage === 'english'
+            ? initialLanguage
+            : null;
+        const initialLang: PlayerLanguage =
+          requested && resolvePlaybackUrl(pres, requested)
+            ? requested
+            : resolvePlaybackUrl(pres, 'english')
+              ? 'english'
+              : 'kannada';
         const url = resolvePlaybackUrl(pres, initialLang);
         if (!url) {
           setError('This video is not available right now. Please try again later.');
@@ -105,7 +114,7 @@ export default function MarketingLecturePlayerScreen() {
     return () => {
       cancelled = true;
     };
-  }, [jobId]);
+  }, [jobId, initialLanguage]);
 
   const hasKannada = !!presentation?.kannada_vimeo_mp4_url;
   const hasEnglish = !!presentation?.vimeo_mp4_url;

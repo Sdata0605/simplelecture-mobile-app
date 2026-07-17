@@ -3097,6 +3097,7 @@ export default function TopicDetailsScreen() {
               chapterId: routeChapterId || topic?.chapter_id || undefined,
               subjectId: subjectId || undefined,
               courseId: languageCourseId || undefined,
+              initialLanguage: selectedAILanguage || 'english',
             });
             return;
           }

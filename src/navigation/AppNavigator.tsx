@@ -140,6 +140,7 @@ export type RootStackParamList = {
     chapterId?: string;
     subjectId?: string;
     courseId?: string;
+    initialLanguage?: string;
   };
   V4Player: {
     jobId: string;
