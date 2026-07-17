@@ -3093,6 +3093,10 @@ export default function TopicDetailsScreen() {
             navigation.navigate('MarketingLecturePlayer', {
               jobId,
               title: video.title || topic?.title || 'Lecture',
+              topicId: topicId || undefined,
+              chapterId: routeChapterId || topic?.chapter_id || undefined,
+              subjectId: subjectId || undefined,
+              courseId: languageCourseId || undefined,
             });
             return;
           }
