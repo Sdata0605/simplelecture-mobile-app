@@ -96,7 +96,14 @@ interface AvatarLanguage {
   speaker?: string;
   task_id?: string;
   duration?: number;
+  video_url?: string;
+  b2_url?: string;
+  vimeo_url?: string;
+  vimeo_mp4_url?: string;
 }
+
+// Statuses that mean a language avatar is usable (mirrors the web player).
+const USABLE_AVATAR_STATUSES = ['completed', 'ready', 'success'];
 
 interface Section {
   section_id: number;
@@ -735,11 +742,17 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
   const getAvatarPathForSection = (section: Section, language: string = 'english'): string | null => {
     if (language !== 'english' && section.avatar_languages) {
       const langAvatar = section.avatar_languages.find(
-        al => al.language.toLowerCase() === language.toLowerCase() && al.status === 'completed'
+        al => al.language.toLowerCase() === language.toLowerCase() &&
+          USABLE_AVATAR_STATUSES.includes((al.status || '').toLowerCase())
       );
-      if (langAvatar?.video_path) {
-        console.log(`[AILecturePlayer] Using ${language} avatar: ${langAvatar.video_path}`);
-        return langAvatar.video_path;
+      if (langAvatar) {
+        // Fallback order mirrors the web player: durable path → direct URL → Vimeo.
+        const source = langAvatar.video_path || langAvatar.video_url || langAvatar.b2_url ||
+          langAvatar.vimeo_url || langAvatar.vimeo_mp4_url;
+        if (source) {
+          console.log(`[AILecturePlayer] Using ${language} avatar: ${source}`);
+          return source;
+        }
       }
       console.log(`[AILecturePlayer] No ${language} avatar found for section ${section.section_id}, falling back to English`);
     }
@@ -1392,7 +1405,10 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     setIsPlaying(true);
   };
 
-  const transitionToSection = async (index: number) => {
+  // languageOverride lets a language switch reload the section in the NEW
+  // language immediately — setState is async, so reading selectedLanguage here
+  // right after setSelectedLanguage would still give the old language.
+  const transitionToSection = async (index: number, languageOverride?: string) => {
     if (!presentationData) return;
     if (index < 0 || index >= presentationData.sections.length) return;
 
@@ -1422,7 +1438,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
 
     try {
       const targetSection = presentationData.sections[index];
-      const targetAvatarPath = targetSection ? getAvatarPathForSection(targetSection, selectedLanguage) : null;
+      const targetAvatarPath = targetSection ? getAvatarPathForSection(targetSection, languageOverride ?? selectedLanguage) : null;
 
       if (!targetAvatarPath) {
         // No avatar for this section - rely on the timer fallback to drive content.
@@ -1699,8 +1715,9 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
   const handleLanguageSwitch = useCallback((lang: string) => {
     if (lang === selectedLanguage) return;
     setSelectedLanguage(lang);
-    // Reload the current section so the new language's avatar is used immediately
-    transitionToSection(currentSectionIndex);
+    // Reload the current section so the new language's avatar is used immediately.
+    // Pass lang explicitly — selectedLanguage state hasn't updated yet this tick.
+    transitionToSection(currentSectionIndex, lang);
   }, [selectedLanguage, currentSectionIndex, transitionToSection]);
 
   const formatTime = (seconds: number): string => {
@@ -2259,6 +2276,36 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     );
   };
 
+  // Kannada is available when a merged Kannada MP4 exists OR any section has a
+  // usable Kannada avatar entry (mirrors the web player's availability check).
+  const hasKannada = !!(
+    presentationData?.kannada_vimeo_mp4_url ||
+    presentationData?.kannada_final_video ||
+    presentationData?.sections?.some(s =>
+      s.avatar_languages?.some(al =>
+        al.language?.toLowerCase() === 'kannada' &&
+        USABLE_AVATAR_STATUSES.includes((al.status || '').toLowerCase())
+      )
+    )
+  );
+
+  const renderLangChips = (compact: boolean) => (
+    <View style={compact ? styles.langChipsInline : styles.langSelectorRow}>
+      {(['english', 'kannada'] as const).map(lang => (
+        <TouchableOpacity
+          key={lang}
+          style={[styles.langSelectorBtn, selectedLanguage === lang && styles.langSelectorBtnActive]}
+          onPress={() => { handleControlInteraction(); handleLanguageSwitch(lang); }}
+          data-testid={`button-player-lang-${lang}`}
+        >
+          <Text style={[styles.langSelectorBtnText, selectedLanguage === lang && styles.langSelectorBtnTextActive]}>
+            {compact ? (lang === 'english' ? 'EN' : 'ಕ') : (lang === 'english' ? 'English' : 'ಕನ್ನಡ')}
+          </Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+
   const renderControls = () => {
     return (
       <Pressable 
@@ -2335,6 +2382,8 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
           <Ionicons name="list" size={24} color={colors.white} />
         </TouchableOpacity>
 
+        {hasKannada && renderLangChips(true)}
+
         <TouchableOpacity 
           style={styles.controlButton} 
           onPress={handleFullscreenToggle}
@@ -2351,7 +2400,6 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
 
   const renderPortraitControls = () => {
     const totalSections = presentationData?.sections.length || 0;
-    const hasKannada = !!(presentationData?.kannada_vimeo_mp4_url);
     return (
       <View style={styles.portraitControlsContainer} onTouchStart={handleControlInteraction}>
         <View style={styles.portraitSingleRow}>
@@ -2398,21 +2446,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
           )}
         </View>
         {/* Language selector — only shown when a Kannada version exists */}
-        {hasKannada && (
-          <View style={styles.langSelectorRow}>
-            {(['english', 'kannada'] as const).map(lang => (
-              <TouchableOpacity
-                key={lang}
-                style={[styles.langSelectorBtn, selectedLanguage === lang && styles.langSelectorBtnActive]}
-                onPress={() => handleLanguageSwitch(lang)}
-              >
-                <Text style={[styles.langSelectorBtnText, selectedLanguage === lang && styles.langSelectorBtnTextActive]}>
-                  {lang === 'english' ? 'English' : 'ಕನ್ನಡ'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
+        {hasKannada && renderLangChips(false)}
       </View>
     );
   };
@@ -3084,6 +3118,12 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(99, 102, 241, 0.15)',
     paddingHorizontal: 6,
     paddingVertical: 5,
+  },
+  langChipsInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginHorizontal: 4,
   },
   langSelectorRow: {
     flexDirection: 'row',

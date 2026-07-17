@@ -3108,6 +3108,7 @@ export default function TopicDetailsScreen() {
             subjectId: subjectId || undefined,
             courseId: languageCourseId || undefined,
             topicTitle: video.title || topic?.title || 'AI Lecture',
+            initialLanguage: selectedAILanguage || 'english',
           });
           return;
         }
