@@ -1,4 +1,24 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  sanitizeSlidePreview,
+  DoubtSource,
+  DoubtSlidePreview,
+} from '../utils/doubtThreads';
+
+/** Normalized data from the `ai-text-answer-proxy` Doubts answer service. */
+export interface AITextAnswerData {
+  answer: string;
+  keyPoints: string[];
+  sources: DoubtSource[];
+  slidePreview: DoubtSlidePreview | null;
+  suggestions: string[];
+  isDocGrounded: boolean;
+}
+
+export type AITextAnswerResult =
+  | { ok: true; data: AITextAnswerData }
+  | { ok: false; reason: 'no_content'; message?: string }
+  | { ok: false; reason: 'error'; message: string };
 
 export const SUPABASE_URL = 'https://supabase-proxy.utuberpraveen.workers.dev';
 // Direct Supabase project URL, used ONLY for the long-running AI Teaching
@@ -2337,6 +2357,102 @@ class SupabaseService {
       };
     } catch (error) {
       return { success: false, error: 'Network error. Please try again.' };
+    }
+  }
+
+  /**
+   * New Doubts-tab answer service (`ai-text-answer-proxy` edge function).
+   * Returns a rich answer: markdown+LaTeX text, key points, sources, an
+   * optional slide mini-presentation, and suggested follow-up questions.
+   * Normalized into ok / no_content / error per the web client contract.
+   */
+  async askAITextAnswer(params: {
+    question: string;
+    subjectId: string;
+    subjectName?: string;
+    language?: string;
+  }): Promise<AITextAnswerResult> {
+    // Server can take ~30s; the spec requires a client timeout of ≥45s.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45_000);
+    try {
+      const accessToken = await this.getAccessToken();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/ai-text-answer-proxy`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken || SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({
+          language: params.language || 'en',
+          question: params.question,
+          subjectId: params.subjectId,
+          subjectName: params.subjectName,
+        }),
+        signal: controller.signal,
+      });
+
+      let data: any;
+      try {
+        data = await response.json();
+      } catch {
+        return { ok: false, reason: 'error', message: `Server error (${response.status}). Please try again.` };
+      }
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          reason: 'error',
+          message: data?.error || data?.message || `Request failed (${response.status}). Please try again.`,
+        };
+      }
+
+      if (data?.no_content === true) {
+        return {
+          ok: false,
+          reason: 'no_content',
+          message: typeof data.message === 'string' && data.message.trim() ? data.message : undefined,
+        };
+      }
+
+      if (typeof data?.answer !== 'string' || !data.answer.trim()) {
+        return { ok: false, reason: 'error', message: 'Could not get a response. Please try again.' };
+      }
+
+      return {
+        ok: true,
+        data: {
+          answer: data.answer,
+          keyPoints: Array.isArray(data.key_points)
+            ? data.key_points.filter((p: any): p is string => typeof p === 'string' && !!p.trim())
+            : [],
+          sources: Array.isArray(data.sources)
+            ? data.sources
+                .filter((s: any) => s && typeof s === 'object')
+                .map((s: any) => ({
+                  docTitle: typeof s.doc_title === 'string' ? s.doc_title : '',
+                  sectionTitle: typeof s.section_title === 'string' ? s.section_title : '',
+                }))
+                .filter((s: DoubtSource) => !!s.docTitle || !!s.sectionTitle)
+            : [],
+          slidePreview: sanitizeSlidePreview(data.slide_preview),
+          suggestions: Array.isArray(data.suggestions)
+            ? data.suggestions
+                .map((s: any) => (typeof s === 'string' ? s : s?.question))
+                .filter((s: any): s is string => typeof s === 'string' && !!s.trim())
+                .slice(0, 6)
+            : [],
+          isDocGrounded: !!data.is_doc_grounded,
+        },
+      };
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        return { ok: false, reason: 'error', message: 'The answer is taking too long. Please try again.' };
+      }
+      return { ok: false, reason: 'error', message: 'Network error. Please try again.' };
+    } finally {
+      clearTimeout(timer);
     }
   }
 

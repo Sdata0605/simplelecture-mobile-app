@@ -12,11 +12,48 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+export interface DoubtSource {
+  docTitle: string;
+  sectionTitle: string;
+}
+
+export interface DoubtSlideAudio {
+  slideIndex: number;
+  audioUrl: string;
+  duration?: number;
+}
+
+export interface DoubtSlide {
+  title?: string;
+  /** Paragraph text (server `content`). */
+  content?: string;
+  /** Bullets — server `bullet_points`, or `keyPoints` in cached decks. */
+  bullet_points?: string[];
+  infographicUrl?: string;
+}
+
+/** Slide mini-presentation attached to an answer (server `slide_preview`). */
+export interface DoubtSlidePreview {
+  found: true;
+  presentation_slides: DoubtSlide[];
+  slide_audio_urls?: { urls?: DoubtSlideAudio[] };
+  image_urls?: Record<string, { url?: string }>;
+  total_duration_seconds?: number;
+}
+
 export interface DoubtStoredMessage {
   role: 'user' | 'assistant';
   content: string;
   /** Follow-up prompt chips; only the newest assistant message keeps them. */
   suggestions?: string[];
+  /** Bulleted highlights shown under the answer. */
+  keyPoints?: string[];
+  /** "Doc title · Section" chips; hidden when empty. */
+  sources?: DoubtSource[];
+  /** Mini slide presentation; only the newest assistant message keeps it. */
+  slidePreview?: DoubtSlidePreview;
+  /** True when the server said the question isn't in the course corpus. */
+  noContent?: boolean;
 }
 
 export interface DoubtThread {
@@ -94,6 +131,56 @@ export function sortThreads(threads: DoubtThread[]): DoubtThread[] {
   return [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+/** Validate a raw slide preview into a DoubtSlidePreview, or null. */
+export function sanitizeSlidePreview(raw: any): DoubtSlidePreview | null {
+  if (!raw || typeof raw !== 'object' || raw.found !== true) return null;
+  if (!Array.isArray(raw.presentation_slides) || raw.presentation_slides.length === 0) return null;
+  const slides: DoubtSlide[] = raw.presentation_slides
+    .filter((s: any) => s && typeof s === 'object')
+    .map((s: any) => {
+      const rawBullets = Array.isArray(s.bullet_points)
+        ? s.bullet_points
+        : Array.isArray(s.keyPoints)
+          ? s.keyPoints
+          : [];
+      const bullets = rawBullets.filter((b: any): b is string => typeof b === 'string' && !!b.trim());
+      return {
+        title: typeof s.title === 'string' ? s.title : undefined,
+        content: typeof s.content === 'string' && s.content.trim() ? s.content : undefined,
+        bullet_points: bullets.length > 0 ? bullets : undefined,
+        infographicUrl:
+          typeof s.infographicUrl === 'string' && s.infographicUrl ? s.infographicUrl : undefined,
+      };
+    });
+  if (slides.length === 0) return null;
+  const preview: DoubtSlidePreview = { found: true, presentation_slides: slides };
+  const rawUrls = raw.slide_audio_urls?.urls;
+  if (Array.isArray(rawUrls)) {
+    const urls = rawUrls
+      .filter(
+        (u: any) =>
+          u && typeof u === 'object' && typeof u.slideIndex === 'number' && typeof u.audioUrl === 'string' && !!u.audioUrl
+      )
+      .map((u: any) => ({
+        slideIndex: u.slideIndex,
+        audioUrl: u.audioUrl,
+        duration: typeof u.duration === 'number' && isFinite(u.duration) ? u.duration : undefined,
+      }));
+    if (urls.length > 0) preview.slide_audio_urls = { urls };
+  }
+  if (raw.image_urls && typeof raw.image_urls === 'object' && !Array.isArray(raw.image_urls)) {
+    const images: Record<string, { url?: string }> = {};
+    for (const [k, v] of Object.entries<any>(raw.image_urls)) {
+      if (v && typeof v === 'object' && typeof v.url === 'string' && v.url) images[k] = { url: v.url };
+    }
+    if (Object.keys(images).length > 0) preview.image_urls = images;
+  }
+  if (typeof raw.total_duration_seconds === 'number' && isFinite(raw.total_duration_seconds) && raw.total_duration_seconds > 0) {
+    preview.total_duration_seconds = raw.total_duration_seconds;
+  }
+  return preview;
+}
+
 function sanitizeMessage(raw: any): DoubtStoredMessage | null {
   if (!raw || typeof raw !== 'object') return null;
   if (raw.role !== 'user' && raw.role !== 'assistant') return null;
@@ -105,6 +192,23 @@ function sanitizeMessage(raw: any): DoubtStoredMessage | null {
       .filter((s: any): s is string => !!s && !!s.trim());
     if (chips.length > 0) msg.suggestions = chips;
   }
+  if (Array.isArray(raw.keyPoints)) {
+    const points = raw.keyPoints.filter((p: any): p is string => typeof p === 'string' && !!p.trim());
+    if (points.length > 0) msg.keyPoints = points;
+  }
+  if (Array.isArray(raw.sources)) {
+    const sources = raw.sources
+      .filter((s: any) => s && typeof s === 'object')
+      .map((s: any) => ({
+        docTitle: typeof s.docTitle === 'string' ? s.docTitle : '',
+        sectionTitle: typeof s.sectionTitle === 'string' ? s.sectionTitle : '',
+      }))
+      .filter((s: DoubtSource) => !!s.docTitle || !!s.sectionTitle);
+    if (sources.length > 0) msg.sources = sources;
+  }
+  const preview = sanitizeSlidePreview(raw.slidePreview);
+  if (preview) msg.slidePreview = preview;
+  if (raw.noContent === true) msg.noContent = true;
   return msg;
 }
 

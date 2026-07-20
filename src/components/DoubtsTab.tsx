@@ -17,7 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase as supabaseService } from '../services/supabase';
-import { buildKatexHtml } from './MathText';
+import MathText, { buildKatexHtml } from './MathText';
 import {
   containsLatex,
   convertMathpixToStandard,
@@ -25,9 +25,11 @@ import {
   stripLatexToPlainText,
 } from '../utils/latexFormat';
 import DoubtThreadDrawer from './doubts/DoubtThreadDrawer';
+import SlidePreviewPlayer from './doubts/SlidePreviewPlayer';
 import {
   DoubtThread,
   DoubtStoredMessage,
+  DoubtSource,
   createThread,
   deriveTitle,
   loadThreads,
@@ -52,11 +54,7 @@ const colors = {
   error: '#EF4444',
 };
 
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  suggestions?: string[];
-}
+type ChatMessage = DoubtStoredMessage;
 
 interface DoubtsTabProps {
   subjectId: string;
@@ -239,6 +237,41 @@ const chipLabel = (text: string) => {
   return containsLatex(normalized) ? stripLatexToPlainText(normalized) : text;
 };
 
+/** Bulleted highlights under the answer. Math-aware per point. */
+const KeyPointsList = ({ items }: { items: string[] }) => (
+  <View style={kpStyles.container}>
+    <Text style={kpStyles.heading}>Key points</Text>
+    {items.map((point, i) => (
+      <View key={i} style={kpStyles.row}>
+        <Text style={kpStyles.dot}>•</Text>
+        <View style={kpStyles.textWrap}>
+          {/* MathText sizes itself to the available width, so LaTeX in key
+              points renders correctly inside this narrower block. */}
+          <MathText
+            content={convertMathpixToStandard(point)}
+            color={colors.text}
+            textStyle={{ fontSize: 13, lineHeight: 19 }}
+          />
+        </View>
+      </View>
+    ))}
+  </View>
+);
+
+/** Small "Doc title · Section" pills. Hidden when empty (caller checks). */
+const SourceChips = ({ sources }: { sources: DoubtSource[] }) => (
+  <View style={srcStyles.container}>
+    {sources.map((s, i) => (
+      <View key={i} style={srcStyles.chip}>
+        <Ionicons name="document-text-outline" size={11} color={colors.textSecondary} />
+        <Text style={srcStyles.chipText} numberOfLines={1}>
+          {[s.docTitle, s.sectionTitle].filter(Boolean).join(' · ')}
+        </Text>
+      </View>
+    ))}
+  </View>
+);
+
 const TypingIndicator = () => {
   const [dots, setDots] = useState('');
 
@@ -378,13 +411,11 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
     // all threads deleted).
     const now = Date.now();
     const target: DoubtThread = activeThread ?? createThread(now);
-    // Prior history only — the server appends the new question itself.
-    const history = target.messages.map((m) => ({ role: m.role, content: m.content }));
     const userMessage: DoubtStoredMessage = { role: 'user', content: question };
-    // Optimistically add the user bubble and clear suggestion chips from any
-    // earlier assistant replies (only the newest reply shows chips).
+    // Optimistically add the user bubble and clear suggestion chips + slide
+    // previews from earlier assistant replies (only the newest reply shows them).
     const optimisticMessages = [
-      ...target.messages.map((m) => ({ ...m, suggestions: undefined })),
+      ...target.messages.map((m) => ({ ...m, suggestions: undefined, slidePreview: undefined })),
       userMessage,
     ];
     const optimisticThread: DoubtThread = {
@@ -416,22 +447,36 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
       // AI answer and DB similar-question matches run in parallel; the RPC is
       // best-effort and never blocks or fails the answer path.
       const [result, dbMatches] = await Promise.all([
-        supabaseService.askDoubt({
+        supabaseService.askAITextAnswer({
           question,
           subjectId,
-          messages: history,
-          studentId,
+          subjectName,
         }),
         supabaseService.findSimilarQuestions(question, subjectId),
       ]);
 
-      if (result.success && result.answer) {
-        const merged = mergeSuggestions(dbMatches, result.suggestions || [], 6);
-        const assistantMessage: DoubtStoredMessage = {
-          role: 'assistant',
-          content: result.answer,
-          suggestions: merged.length > 0 ? merged : undefined,
-        };
+      if (result.ok || result.reason === 'no_content') {
+        let assistantMessage: DoubtStoredMessage;
+        if (result.ok) {
+          const merged = mergeSuggestions(dbMatches, result.data.suggestions, 6);
+          assistantMessage = {
+            role: 'assistant',
+            content: result.data.answer,
+            suggestions: merged.length > 0 ? merged : undefined,
+            keyPoints: result.data.keyPoints.length > 0 ? result.data.keyPoints : undefined,
+            sources: result.data.sources.length > 0 ? result.data.sources : undefined,
+            slidePreview: result.data.slidePreview ?? undefined,
+          };
+        } else {
+          // Not in the course corpus — a normal assistant reply, not an error.
+          assistantMessage = {
+            role: 'assistant',
+            content:
+              result.message ||
+              "This question doesn't seem to be part of your course. Please try the Forum for general questions.",
+            noContent: true,
+          };
+        }
         if (isCurrentSubject()) {
           setThreads((current) => {
             const next = current.map((t) =>
@@ -460,7 +505,7 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
         // Roll back to the pre-send conversation (restores prior chips) and text.
         rollback();
         if (isCurrentSubject()) {
-          Alert.alert('Error', result.error || 'Could not get a response. Please try again.');
+          Alert.alert('Error', result.message || 'Could not get a response. Please try again.');
         }
       }
     } catch {
@@ -574,7 +619,19 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
                   {msg.role === 'user' ? (
                     <Text style={styles.userText}>{msg.content}</Text>
                   ) : (
-                    <AssistantMessage content={msg.content} />
+                    <View>
+                      <AssistantMessage content={msg.content} />
+                      {!msg.noContent && msg.keyPoints && msg.keyPoints.length > 0 && (
+                        <KeyPointsList items={msg.keyPoints} />
+                      )}
+                      {!msg.noContent && msg.sources && msg.sources.length > 0 && (
+                        <SourceChips sources={msg.sources} />
+                      )}
+                      {!msg.noContent &&
+                        msg.slidePreview &&
+                        index === messages.length - 1 &&
+                        !isLoading && <SlidePreviewPlayer preview={msg.slidePreview} />}
+                    </View>
                   )}
                 </View>
               </View>
@@ -648,6 +705,65 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
     </View>
   );
 }
+
+const kpStyles = StyleSheet.create({
+  container: {
+    marginTop: 8,
+    backgroundColor: colors.primaryLight,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  heading: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  row: {
+    flexDirection: 'row',
+    marginBottom: 2,
+  },
+  dot: {
+    fontSize: 13,
+    color: colors.primary,
+    marginRight: 6,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  textWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+});
+
+const srcStyles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    maxWidth: SCREEN_WIDTH * 0.8,
+  },
+  chipText: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    flexShrink: 1,
+  },
+});
 
 const mathStyles = StyleSheet.create({
   loading: {
