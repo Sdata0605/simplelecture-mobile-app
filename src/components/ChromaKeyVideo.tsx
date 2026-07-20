@@ -369,10 +369,9 @@ ${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0 || cs.
               const row = y * w;
               for (let x = 0; x < w; x++) {
                 const p = row + x;
-                // Only touch near-opaque pixels: half-keyed interior noise
-                // (compression speckle) is left alone so it can't be eroded
-                // into visible patches.
-                if (alphaSnap[p] < 200) continue;
+                const a0 = alphaSnap[p];
+                // Fully transparent = background, nothing to clean.
+                if (a0 < 40) continue;
                 // Near transparency? Check a cross + diagonal at radius R,
                 // remembering the CLOSEST hole distance for falloff.
                 let holeDist = 0;
@@ -390,6 +389,15 @@ ${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0 || cs.
                 }
                 if (holeDist === 0) continue;
                 const i = p * 4;
+                // Semi-transparent pixel next to true background: this is a
+                // keyed-green body/background blend the main pass only
+                // half-faded (the surviving visible band). Wipe it entirely.
+                // Identical-alpha speckle deep inside the body has no
+                // transparent neighbor within R and is never touched.
+                if (a0 < 200) {
+                  data[i + 3] = 0;
+                  continue;
+                }
                 // Geometric erode: the outermost EDGE_ERODE pixels of the
                 // silhouette are ALWAYS a body/background blend (that's what
                 // the surviving thin green line is made of), so remove them
