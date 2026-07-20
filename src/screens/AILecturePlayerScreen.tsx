@@ -15,6 +15,7 @@ import {
   useWindowDimensions,
   Image,
   Alert,
+  PanResponder,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Video, ResizeMode, AVPlaybackStatus } from 'expo-av';
@@ -51,6 +52,124 @@ const colors = {
   warning: '#f59e0b',
   info: '#3b82f6',
 };
+
+// Draggable seek bar. Shows live scrub position while dragging; calls onSeek
+// exactly once on release. Track/fill styles are passed in so the same
+// component serves both landscape and portrait control bars.
+interface SeekBarProps {
+  currentTime: number;
+  duration: number;
+  onSeek: (time: number) => void;
+  onInteract?: () => void;
+  containerStyle?: any;
+  trackStyle: any;
+  fillStyle: any;
+}
+
+const SeekBar: React.FC<SeekBarProps> = ({
+  currentTime,
+  duration,
+  onSeek,
+  onInteract,
+  containerStyle,
+  trackStyle,
+  fillStyle,
+}) => {
+  const [scrubTime, setScrubTime] = useState<number | null>(null);
+  const scrubTimeRef = useRef<number | null>(null);
+  const widthRef = useRef(0);
+  const durationRef = useRef(duration);
+  durationRef.current = duration;
+  const onSeekRef = useRef(onSeek);
+  onSeekRef.current = onSeek;
+  const onInteractRef = useRef(onInteract);
+  onInteractRef.current = onInteract;
+
+  const updateScrub = (x: number) => {
+    const w = widthRef.current;
+    const d = durationRef.current;
+    if (w <= 0 || d <= 0) return;
+    const t = Math.max(0, Math.min((x / w) * d, d));
+    scrubTimeRef.current = t;
+    setScrubTime(t);
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: (evt) => {
+        onInteractRef.current?.();
+        updateScrub(evt.nativeEvent.locationX);
+      },
+      onPanResponderMove: (evt) => {
+        onInteractRef.current?.();
+        updateScrub(evt.nativeEvent.locationX);
+      },
+      onPanResponderRelease: () => {
+        const t = scrubTimeRef.current;
+        scrubTimeRef.current = null;
+        setScrubTime(null);
+        if (t !== null) onSeekRef.current(t);
+      },
+      onPanResponderTerminate: () => {
+        scrubTimeRef.current = null;
+        setScrubTime(null);
+      },
+    })
+  ).current;
+
+  const shown = scrubTime !== null ? scrubTime : currentTime;
+  const pct = duration > 0 ? Math.max(0, Math.min((shown / duration) * 100, 100)) : 0;
+
+  return (
+    <View
+      style={[seekBarStyles.hitArea, containerStyle]}
+      onLayout={(e) => {
+        widthRef.current = e.nativeEvent.layout.width;
+      }}
+      {...panResponder.panHandlers}
+    >
+      <View style={trackStyle} pointerEvents="none">
+        <View style={[fillStyle, { width: `${pct}%` }]} />
+      </View>
+      <View
+        pointerEvents="none"
+        style={[
+          seekBarStyles.handle,
+          { left: `${pct}%` },
+          scrubTime !== null && seekBarStyles.handleActive,
+        ]}
+      />
+    </View>
+  );
+};
+
+const seekBarStyles = StyleSheet.create({
+  hitArea: {
+    height: 28,
+    justifyContent: 'center',
+  },
+  handle: {
+    position: 'absolute',
+    top: '50%',
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+    marginLeft: -6,
+    marginTop: -6,
+    elevation: 2,
+  },
+  handleActive: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    marginLeft: -8,
+    marginTop: -8,
+  },
+});
 
 interface Segment {
   segment_id: string;
@@ -193,6 +312,10 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
   const [isFullscreen, setIsFullscreen] = useState(startFullscreen ?? false);
   const [orientationReady, setOrientationReady] = useState(!startFullscreen); // Wait for orientation lock if starting fullscreen
   const savedPositionRef = useRef<number | null>(null); // Store position during fullscreen toggle
+  const seekInProgressRef = useRef(false); // Ignore stale playback ticks while a user seek settles
+  const seekOpTokenRef = useRef(0); // Monotonic token: only the latest seek may commit state
+  const seekSettleRef = useRef<{ until: number; target: number } | null>(null); // Drop late pre-seek ticks
+  const pendingOverlayOffsetMsRef = useRef<number | null>(null); // Cross-segment seek: start new beat clip at this offset
   const savedWasPlayingRef = useRef<boolean>(false); // Store play state during fullscreen toggle
   const [pendingPositionRestore, setPendingPositionRestore] = useState<number | null>(null); // Trigger restore when avatar ready
   const isTransitioningRef = useRef(false);
@@ -468,7 +591,11 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
           return;
         }
         try {
-          await contentVideoRef.current.setPositionAsync(0);
+          // Normally a new segment's clip starts at 0; after a cross-segment
+          // user seek it must start at the segment-relative seek offset.
+          const startOffsetMs = pendingOverlayOffsetMsRef.current ?? 0;
+          pendingOverlayOffsetMsRef.current = null;
+          await contentVideoRef.current.setPositionAsync(startOffsetMs);
           await contentVideoRef.current.playAsync();
           overlayPlayingSegmentRef.current = segmentKey;
           overlayStartTimeRef.current = Date.now();
@@ -1276,6 +1403,23 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
       return;
     }
 
+    // While a user-initiated seek is settling, the avatar still reports ticks at
+    // the OLD position; letting them through would re-reveal beats we just
+    // cleared for a backward seek. Drop them until the seek completes.
+    if (seekInProgressRef.current) {
+      return;
+    }
+    // After a seek, the player may still deliver a few ticks at the OLD
+    // position. Drop ticks far from the seek target for a short window.
+    const settle = seekSettleRef.current;
+    if (settle) {
+      const tickTime = (status.positionMillis || 0) / 1000;
+      if (Date.now() < settle.until && Math.abs(tickTime - settle.target) > 1.5) {
+        return;
+      }
+      seekSettleRef.current = null;
+    }
+
     // While a layer swap is pending, the still-mounted OLD active avatar must not
     // drive the (already-updated) new section's timeline/beats/section-end. Ignoring
     // its events keeps the avatar tightly bound to the displayed section.
@@ -1383,6 +1527,10 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     setPhase('teach');
     lastContentRef.current = null;
     overlayPlayingSegmentRef.current = null;
+    // A section change invalidates any in-flight user seek state.
+    pendingOverlayOffsetMsRef.current = null;
+    seekSettleRef.current = null;
+    seekOpTokenRef.current++;
     setFlashcardFlipped(null);
     setQuizPhase('introduce');
     setCurrentQuizIndex(0);
@@ -1697,6 +1845,96 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     const activeAvatarRef = activeAvatarLayer === 'A' ? avatarARef : avatarBRef;
     if (activeAvatarRef.current) {
       await activeAvatarRef.current.setPositionAsync(time * 1000);
+    }
+  };
+
+  // Find the active segment index for an arbitrary time (same scan as onTimeUpdate).
+  const findSegmentIndexAtTime = (time: number): number => {
+    const segments = currentSection?.narration.segments || [];
+    let cumulativeTime = 0;
+    for (let i = 0; i < segments.length; i++) {
+      const segStart = segments[i].start_time ?? cumulativeTime;
+      const segEnd = segments[i].end_time ?? (segStart + segments[i].duration_seconds);
+      if (time >= segStart && time < segEnd) return i;
+      cumulativeTime = segEnd;
+    }
+    return Math.max(0, segments.length - 1);
+  };
+
+  // User-initiated seek within the current section (progress bar drag/tap).
+  // Master = avatar video; beats/overlays re-align from the new time.
+  const performSeek = async (rawTime: number) => {
+    if (!currentSection || duration <= 0) return;
+    const t = Math.max(0, Math.min(rawTime, Math.max(0, duration - 0.25)));
+
+    // Latest seek wins: any older in-flight seek bails after each await.
+    const opToken = ++seekOpTokenRef.current;
+
+    // Reset reveal state so a backward seek un-reveals later beats; a forward
+    // seek recomputes to the identical set (reveal rules are all `time >= X`).
+    seekInProgressRef.current = true;
+    try {
+      currentTimeRef.current = t;
+      setDisplayTime(t);
+
+      if (!useTimerFallback) {
+        const activeAvatarRef = activeAvatarLayer === 'A' ? avatarARef : avatarBRef;
+        if (activeAvatarRef.current) {
+          try {
+            await activeAvatarRef.current.setPositionAsync(t * 1000);
+          } catch (e) {
+            console.log('[AILecturePlayer] Seek error:', e);
+          }
+        }
+      }
+      if (opToken !== seekOpTokenRef.current) return;
+
+      revealedBeatsRef.current = [];
+      setRevealedBeats([]);
+
+      // Recompute segment/phase/quiz/reveals for the new time.
+      onTimeUpdate(t);
+
+      // Re-sync the content (beat) video once to the segment-relative offset.
+      const segIdx = findSegmentIndexAtTime(t);
+      const segStart = getSegmentStartTime(segIdx);
+      const offsetMs = Math.max(0, (t - segStart) * 1000);
+
+      if (segIdx === currentSegmentIndex && contentVideoRef.current) {
+        // Same beat window: re-seek the already-loaded clip exactly once.
+        try {
+          const ref = contentVideoRef.current;
+          const st = await ref.getStatusAsync();
+          if (opToken !== seekOpTokenRef.current) return;
+          if (st.isLoaded) {
+            await ref.setPositionAsync(offsetMs);
+            if (isPlaying && !st.isPlaying) {
+              await ref.playAsync();
+            }
+            // Mark this segment as active so the phase-transition effect
+            // doesn't restart the clip from 0 (seek-token equivalent).
+            overlayPlayingSegmentRef.current = `${currentSectionIndex}_${segIdx}`;
+            overlayStartTimeRef.current = Date.now();
+            lastOverlaySyncRef.current = Date.now();
+          }
+        } catch (e) {
+          // Overlay ref may be mid-transition; drift sync will catch up.
+        }
+      } else {
+        // New beat window: the segment-change effects swap the clip source and
+        // start it at this pending offset (covers timer-fallback mode, which
+        // has no avatar status ticks for drift correction). Also zero the sync
+        // timers so the drift-sync path can correct on the first tick.
+        pendingOverlayOffsetMsRef.current = offsetMs;
+        overlayStartTimeRef.current = 0;
+        lastOverlaySyncRef.current = 0;
+      }
+    } finally {
+      if (opToken === seekOpTokenRef.current) {
+        seekInProgressRef.current = false;
+        // Ignore late pre-seek ticks for a short window after the seek settles.
+        seekSettleRef.current = { until: Date.now() + 1200, target: t };
+      }
     }
   };
 
@@ -2359,14 +2597,14 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
         </TouchableOpacity>
 
         <View style={styles.timelineContainer}>
-          <View style={styles.timelineTrack}>
-            <View 
-              style={[
-                styles.timelineFill, 
-                { width: `${duration > 0 ? (displayTime / duration) * 100 : 0}%` }
-              ]} 
-            />
-          </View>
+          <SeekBar
+            currentTime={displayTime}
+            duration={duration}
+            onSeek={performSeek}
+            onInteract={handleControlInteraction}
+            trackStyle={styles.timelineTrack}
+            fillStyle={styles.timelineFill}
+          />
           <Text style={styles.timeDisplay}>
             {formatTime(displayTime)} / {formatTime(duration)}
           </Text>
@@ -2404,14 +2642,15 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
       <View style={styles.portraitControlsContainer} onTouchStart={handleControlInteraction}>
         <View style={styles.portraitSingleRow}>
           <Text style={styles.portraitTimeTextInline}>{formatTime(displayTime)}</Text>
-          <View style={styles.portraitTimelineTrack}>
-            <View 
-              style={[
-                styles.portraitTimelineFill, 
-                { width: `${duration > 0 ? (displayTime / duration) * 100 : 0}%` }
-              ]} 
-            />
-          </View>
+          <SeekBar
+            currentTime={displayTime}
+            duration={duration}
+            onSeek={performSeek}
+            onInteract={handleControlInteraction}
+            containerStyle={styles.portraitSeekBarContainer}
+            trackStyle={styles.portraitTimelineTrack}
+            fillStyle={styles.portraitTimelineFill}
+          />
           <Text style={styles.portraitTimeTextInline}>{formatTime(duration)}</Text>
           <TouchableOpacity 
             style={styles.portraitControlBtnInline} 
@@ -3164,8 +3403,10 @@ const styles = StyleSheet.create({
     minWidth: 24,
     textAlign: 'center',
   },
-  portraitTimelineTrack: {
+  portraitSeekBarContainer: {
     flex: 1,
+  },
+  portraitTimelineTrack: {
     height: 3,
     backgroundColor: 'rgba(255, 255, 255, 0.15)',
     borderRadius: 2,
