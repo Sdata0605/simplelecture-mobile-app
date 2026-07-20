@@ -314,7 +314,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
   const savedPositionRef = useRef<number | null>(null); // Store position during fullscreen toggle
   const seekInProgressRef = useRef(false); // Ignore stale playback ticks while a user seek settles
   const seekOpTokenRef = useRef(0); // Monotonic token: only the latest seek may commit state
-  const seekSettleRef = useRef<{ until: number; target: number } | null>(null); // Drop late pre-seek ticks
+  const seekSettleRef = useRef<{ until: number; target: number; drops: number; recovered: boolean } | null>(null); // Drop late pre-seek ticks; one recovery re-seek if avatar never lands
   const pendingOverlayOffsetMsRef = useRef<number | null>(null); // Cross-segment seek: start new beat clip at this offset
   const savedWasPlayingRef = useRef<boolean>(false); // Store play state during fullscreen toggle
   const [pendingPositionRestore, setPendingPositionRestore] = useState<number | null>(null); // Trigger restore when avatar ready
@@ -1409,15 +1409,38 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     if (seekInProgressRef.current) {
       return;
     }
-    // After a seek, the player may still deliver a few ticks at the OLD
-    // position. Drop ticks far from the seek target for a short window.
+    // After a seek, the player may still deliver ticks at the OLD position.
+    // Strict acceptance: only a tick near the target clears the settle state.
+    // If the window expires and the avatar is STILL far off, fire one recovery
+    // re-seek; only after that fails too do we give up (and say so loudly).
     const settle = seekSettleRef.current;
     if (settle) {
       const tickTime = (status.positionMillis || 0) / 1000;
-      if (Date.now() < settle.until && Math.abs(tickTime - settle.target) > 1.5) {
+      const offBy = Math.abs(tickTime - settle.target);
+      if (offBy <= 1.5) {
+        console.log(`[SEEK] TICK accepted at ${tickTime.toFixed(2)}s (target ${settle.target.toFixed(2)}s, dropped ${settle.drops} stale ticks) — avatar timeline CONFIRMED bound`);
+        seekSettleRef.current = null;
+      } else if (Date.now() < settle.until) {
+        settle.drops++;
+        if (settle.drops === 1) {
+          console.log(`[SEEK] TICK dropped (stale ${tickTime.toFixed(2)}s vs target ${settle.target.toFixed(2)}s) — suppressing further drop logs`);
+        }
         return;
+      } else if (!settle.recovered) {
+        // Window expired and avatar never reached the target: recover once.
+        settle.recovered = true;
+        settle.until = Date.now() + 2000;
+        settle.drops++;
+        console.log(`[SEEK] AVATAR NOT BOUND after settle window (at ${tickTime.toFixed(2)}s, target ${settle.target.toFixed(2)}s) — firing recovery re-seek`);
+        const recoveryRef = activeAvatarLayerRef.current === 'A' ? avatarARef : avatarBRef;
+        recoveryRef.current?.setPositionAsync(settle.target * 1000).then((st) => {
+          console.log(`[SEEK] RECOVERY re-seek result pos=${st.isLoaded ? st.positionMillis : -1}ms (target ${(settle.target * 1000).toFixed(0)}ms)`);
+        }).catch(() => {});
+        return;
+      } else {
+        console.log(`[SEEK] GIVING UP — avatar still at ${tickTime.toFixed(2)}s vs target ${settle.target.toFixed(2)}s after recovery; resuming from avatar position (NOT BOUND)`);
+        seekSettleRef.current = null;
       }
-      seekSettleRef.current = null;
     }
 
     // While a layer swap is pending, the still-mounted OLD active avatar must not
@@ -1869,6 +1892,13 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
 
     // Latest seek wins: any older in-flight seek bails after each await.
     const opToken = ++seekOpTokenRef.current;
+    const segIdxBefore = currentSegmentIndex;
+    const revealCountBefore = revealedBeatsRef.current.length;
+    console.log(
+      `[SEEK] #${opToken} START target=${t.toFixed(2)}s (raw=${rawTime.toFixed(2)}) dur=${duration.toFixed(1)} ` +
+      `section=${currentSectionIndex} segBefore=${segIdxBefore} revealsBefore=${revealCountBefore} ` +
+      `fallback=${useTimerFallback} playing=${isPlaying} layer=${activeAvatarLayer}`
+    );
 
     // Reset reveal state so a backward seek un-reveals later beats; a forward
     // seek recomputes to the identical set (reveal rules are all `time >= X`).
@@ -1881,26 +1911,52 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
         const activeAvatarRef = activeAvatarLayer === 'A' ? avatarARef : avatarBRef;
         if (activeAvatarRef.current) {
           try {
-            await activeAvatarRef.current.setPositionAsync(t * 1000);
+            console.log(`[SEEK] #${opToken} AVATAR request setPosition=${(t * 1000).toFixed(0)}ms on layer ${activeAvatarLayer}`);
+            let st = await activeAvatarRef.current.setPositionAsync(t * 1000);
+            let landedMs = st.isLoaded ? st.positionMillis : -1;
+            console.log(`[SEEK] #${opToken} AVATAR result pos=${landedMs}ms loaded=${st.isLoaded} (target=${(t * 1000).toFixed(0)}ms)`);
+            // If the reported position is far from the target the seek did not
+            // land (WebView timeout fallback / not-ready video). Retry once.
+            if (opToken === seekOpTokenRef.current && st.isLoaded && Math.abs(landedMs - t * 1000) > 1500) {
+              console.log(`[SEEK] #${opToken} AVATAR NOT BOUND (off by ${(landedMs - t * 1000).toFixed(0)}ms) — retrying once`);
+              st = await activeAvatarRef.current.setPositionAsync(t * 1000);
+              landedMs = st.isLoaded ? st.positionMillis : -1;
+              console.log(`[SEEK] #${opToken} AVATAR retry result pos=${landedMs}ms loaded=${st.isLoaded} ` +
+                (st.isLoaded && Math.abs(landedMs - t * 1000) <= 1500 ? 'BOUND' : 'STILL NOT BOUND'));
+            } else if (st.isLoaded) {
+              console.log(`[SEEK] #${opToken} AVATAR BOUND (within ${Math.abs(landedMs - t * 1000).toFixed(0)}ms of target)`);
+            }
           } catch (e) {
-            console.log('[AILecturePlayer] Seek error:', e);
+            console.log(`[SEEK] #${opToken} AVATAR seek error:`, e);
           }
+        } else {
+          console.log(`[SEEK] #${opToken} AVATAR NOT BOUND — no active avatar ref (layer ${activeAvatarLayer})`);
         }
+      } else {
+        console.log(`[SEEK] #${opToken} AVATAR skipped (timer fallback mode) — timeline ref moved to ${t.toFixed(2)}s`);
       }
-      if (opToken !== seekOpTokenRef.current) return;
+      if (opToken !== seekOpTokenRef.current) {
+        console.log(`[SEEK] #${opToken} SUPERSEDED by #${seekOpTokenRef.current} — bailing before state commit`);
+        return;
+      }
 
       revealedBeatsRef.current = [];
       setRevealedBeats([]);
 
       // Recompute segment/phase/quiz/reveals for the new time.
       onTimeUpdate(t);
+      console.log(
+        `[SEEK] #${opToken} TEXT/BEATS recomputed at ${t.toFixed(2)}s: reveals ${revealCountBefore} -> ${revealedBeatsRef.current.length} ` +
+        `[${revealedBeatsRef.current.join(',')}]`
+      );
 
       // Re-sync the content (beat) video once to the segment-relative offset.
       const segIdx = findSegmentIndexAtTime(t);
       const segStart = getSegmentStartTime(segIdx);
       const offsetMs = Math.max(0, (t - segStart) * 1000);
+      console.log(`[SEEK] #${opToken} SEGMENT ${segIdxBefore} -> ${segIdx} (segStart=${segStart.toFixed(2)}s, clipOffset=${offsetMs.toFixed(0)}ms)`);
 
-      if (segIdx === currentSegmentIndex && contentVideoRef.current) {
+      if (segIdx === segIdxBefore && contentVideoRef.current) {
         // Same beat window: re-seek the already-loaded clip exactly once.
         try {
           const ref = contentVideoRef.current;
@@ -1916,9 +1972,12 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
             overlayPlayingSegmentRef.current = `${currentSectionIndex}_${segIdx}`;
             overlayStartTimeRef.current = Date.now();
             lastOverlaySyncRef.current = Date.now();
+            console.log(`[SEEK] #${opToken} BEAT CLIP BOUND same-segment: repositioned to ${offsetMs.toFixed(0)}ms`);
+          } else {
+            console.log(`[SEEK] #${opToken} BEAT CLIP no clip loaded (nothing to bind for this segment)`);
           }
         } catch (e) {
-          // Overlay ref may be mid-transition; drift sync will catch up.
+          console.log(`[SEEK] #${opToken} BEAT CLIP NOT BOUND (error, drift-sync will correct):`, e);
         }
       } else {
         // New beat window: the segment-change effects swap the clip source and
@@ -1928,12 +1987,14 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
         pendingOverlayOffsetMsRef.current = offsetMs;
         overlayStartTimeRef.current = 0;
         lastOverlaySyncRef.current = 0;
+        console.log(`[SEEK] #${opToken} BEAT CLIP cross-segment: new clip will start at pending offset ${offsetMs.toFixed(0)}ms`);
       }
     } finally {
       if (opToken === seekOpTokenRef.current) {
         seekInProgressRef.current = false;
         // Ignore late pre-seek ticks for a short window after the seek settles.
-        seekSettleRef.current = { until: Date.now() + 1200, target: t };
+        seekSettleRef.current = { until: Date.now() + 2000, target: t, drops: 0, recovered: false };
+        console.log(`[SEEK] #${opToken} DONE — settle window 2000ms around target ${t.toFixed(2)}s`);
       }
     }
   };

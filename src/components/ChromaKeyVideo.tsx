@@ -243,18 +243,26 @@ const generateChromaKeyHTML = (
           
         case 'seek':
           const targetTime = (params.positionMs || 0) / 1000;
+          const beforeTime = video.currentTime;
+          let seekResolved = false;
           video.currentTime = targetTime;
           // Wait for seeked event before resolving
           const onSeeked = () => {
+            if (seekResolved) return;
+            seekResolved = true;
             video.removeEventListener('seeked', onSeeked);
-            sendMessage('commandResult', { commandId, command: 'seek', success: true, status: getStatus() });
+            sendMessage('commandResult', { commandId, command: 'seek', success: true, via: 'seeked', requestedMs: params.positionMs || 0, beforeMs: Math.floor(beforeTime * 1000), status: getStatus() });
           };
           video.addEventListener('seeked', onSeeked);
-          // Timeout fallback
+          // Timeout fallback: report success=false with via:'timeout' so the
+          // native side knows the seek was NOT confirmed and can retry.
           setTimeout(() => {
+            if (seekResolved) return;
+            seekResolved = true;
             video.removeEventListener('seeked', onSeeked);
-            sendMessage('commandResult', { commandId, command: 'seek', success: true, status: getStatus() });
-          }, 500);
+            const landed = Math.abs(video.currentTime - targetTime) < 1.0;
+            sendMessage('commandResult', { commandId, command: 'seek', success: landed, via: 'timeout', requestedMs: params.positionMs || 0, beforeMs: Math.floor(beforeTime * 1000), status: getStatus() });
+          }, 1000);
           break;
           
         case 'setMuted':
