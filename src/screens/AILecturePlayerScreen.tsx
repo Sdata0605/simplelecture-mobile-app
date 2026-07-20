@@ -36,6 +36,10 @@ import type { VideoDownloadResult } from '../services/videoCacheService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
+// subjectId -> subject name, remembered across player opens so repeat visits
+// resolve the chroma profile instantly without a network lookup.
+const subjectNameCache: Record<string, string> = {};
+
 const colors = {
   primary: '#2BBD6E',
   primaryLight: '#4ADE80',
@@ -284,7 +288,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
   // In embedded (Home preview) mode the inputs come from props; as a route screen
   // they come from navigation params.
   const params: any = embedded ? props : (route.params || {});
-  const { presentationUrl, presentationJson, videoUrl, jobId: passedJobId, topicTitle, startFullscreen, initialLanguage, topicId, chapterId, subjectId, courseId } = params;
+  const { presentationUrl, presentationJson, videoUrl, jobId: passedJobId, topicTitle, startFullscreen, initialLanguage, topicId, chapterId, subjectId, courseId, subjectName: passedSubjectName } = params;
   const [selectedLanguage, setSelectedLanguage] = useState(initialLanguage || 'english');
 
   // Per-subject green-removal profiles. Social Science is LOCKED to the
@@ -297,7 +301,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     // Maths: rim cleanup enabled to remove the dark green border around the
     // avatar silhouette. Only touches pixels adjacent to transparency, so the
     // body stays solid (no patches).
-    maths: { edgeCleanRadius: 2, edgeDespill: 0.85, edgeRimStrength: 0.85 },
+    maths: { edgeCleanRadius: 4, edgeDespill: 0.9, edgeRimStrength: 0.9 },
     science: {},       // tune here for Science only
     default: {},
   };
@@ -309,19 +313,63 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     return CHROMA_PROFILES.default;
   };
   const [chromaProfile, setChromaProfile] = useState<ChromaKeySettings>(CHROMA_PROFILES.default);
+  // Avatar layers wait for the profile to resolve before mounting, so the
+  // subject's settings ALWAYS reach the WebView on first load (no race where
+  // the avatar mounts with defaults and the Maths profile arrives too late).
+  // No subjectId -> nothing to resolve, mount immediately with defaults.
+  // Deterministic sync sources first: subject name passed via navigation, or
+  // a previously fetched name cached for this subjectId. Either one resolves
+  // the profile immediately with no network race at all.
+  const knownSubjectName: string | null =
+    (typeof passedSubjectName === 'string' && passedSubjectName.trim() && passedSubjectName.trim().toLowerCase() !== 'general')
+      ? passedSubjectName.trim()
+      : (subjectId && subjectNameCache[subjectId]) || null;
+  const [chromaResolved, setChromaResolved] = useState(!subjectId || !!knownSubjectName);
   useEffect(() => {
-    let cancelled = false;
-    if (!subjectId) return;
-    supabase.getSubjectName(subjectId).then((res) => {
-      if (cancelled || !res.success || !res.subjectName) return;
-      const profile = profileForSubjectName(res.subjectName);
-      // Only update if the profile actually differs - identical settings must
-      // not remount the avatar WebViews mid-playback.
+    if (knownSubjectName) {
+      const profile = profileForSubjectName(knownSubjectName);
       setChromaProfile((prev) => JSON.stringify(prev) === JSON.stringify(profile) ? prev : profile);
-      console.log('[AILecturePlayer] Chroma profile for subject', res.subjectName, ':', JSON.stringify(profile));
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [subjectId]);
+      console.log('[AILecturePlayer] CHROMA: profile APPLIED (sync) for subject "' + knownSubjectName + '":', JSON.stringify(profile));
+      setChromaResolved(true);
+      return;
+    }
+    if (!subjectId) return;
+    let cancelled = false;
+    let done = false;
+    // Never hold the avatar hostage: if the lookup is slow, mount with the
+    // default profile after 4s (lookup normally returns in well under 1s,
+    // long before video preloading finishes).
+    const failsafe = setTimeout(() => {
+      if (cancelled || done) return;
+      done = true;
+      console.log('[AILecturePlayer] CHROMA: subject lookup timed out - mounting avatar with DEFAULT profile');
+      setChromaResolved(true);
+    }, 4000);
+    const finish = () => { done = true; clearTimeout(failsafe); setChromaResolved(true); };
+    const attempt = (retriesLeft: number) => {
+      supabase.getSubjectName(subjectId).then((res) => {
+        if (cancelled || done) return;
+        if (!res.success || !res.subjectName) {
+          console.log('[AILecturePlayer] CHROMA: subject lookup FAILED', res.error, 'retriesLeft:', retriesLeft);
+          if (retriesLeft > 0) return attempt(retriesLeft - 1);
+          finish();
+          return;
+        }
+        subjectNameCache[subjectId] = res.subjectName;
+        const profile = profileForSubjectName(res.subjectName);
+        setChromaProfile((prev) => JSON.stringify(prev) === JSON.stringify(profile) ? prev : profile);
+        console.log('[AILecturePlayer] CHROMA: profile APPLIED for subject "' + res.subjectName + '":', JSON.stringify(profile));
+        finish();
+      }).catch((e) => {
+        if (cancelled || done) return;
+        console.log('[AILecturePlayer] CHROMA: subject lookup threw', e?.message, 'retriesLeft:', retriesLeft);
+        if (retriesLeft > 0) return attempt(retriesLeft - 1);
+        finish();
+      });
+    };
+    attempt(1);
+    return () => { cancelled = true; clearTimeout(failsafe); };
+  }, [subjectId, knownSubjectName]);
   
   // Extract jobId from videoUrl if not directly provided
   const jobId = passedJobId || extractJobIdFromUrl(videoUrl);
@@ -2379,7 +2427,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     return (
       <>
         {/* Avatar Layer A */}
-        {avatarAUrl && (
+        {avatarAUrl && chromaResolved && (
           <View style={[
             avatarLayerStyle, 
             (isHidden || !isAActive) && styles.avatarHidden
@@ -2436,7 +2484,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
         )}
         
         {/* Avatar Layer B */}
-        {avatarBUrl && (
+        {avatarBUrl && chromaResolved && (
           <View style={[
             avatarLayerStyle, 
             (isHidden || isAActive) && styles.avatarHidden

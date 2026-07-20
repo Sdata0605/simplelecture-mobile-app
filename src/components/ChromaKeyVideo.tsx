@@ -369,10 +369,11 @@ ${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0) ? `
                 // (compression speckle) is left alone so it can't be eroded
                 // into visible patches.
                 if (alphaSnap[p] < 200) continue;
-                // Near transparency? Check a cross + diagonal at radius R.
-                let nearHole = false;
-                for (let d = 1; d <= R && !nearHole; d++) {
-                  nearHole =
+                // Near transparency? Check a cross + diagonal at radius R,
+                // remembering the CLOSEST hole distance for falloff.
+                let holeDist = 0;
+                for (let d = 1; d <= R && holeDist === 0; d++) {
+                  const hit =
                     (x - d >= 0 && alphaSnap[p - d] < 40) ||
                     (x + d < w && alphaSnap[p + d] < 40) ||
                     (y - d >= 0 && alphaSnap[p - d * w] < 40) ||
@@ -381,24 +382,32 @@ ${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0) ? `
                     (x + d < w && y - d >= 0 && alphaSnap[p - d * w + d] < 40) ||
                     (x - d >= 0 && y + d < hgt && alphaSnap[p + d * w - d] < 40) ||
                     (x + d < w && y + d < hgt && alphaSnap[p + d * w + d] < 40);
+                  if (hit) holeDist = d;
                 }
-                if (!nearHole) continue;
+                if (holeDist === 0) continue;
                 const i = p * 4;
                 const r = data[i], g = data[i + 1], b = data[i + 2];
                 const maxRB = r > b ? r : b;
-                if (g > maxRB) {
-                  // Greenish rim pixel. Fade it out proportionally to how
-                  // green-dominant it is (dark chroma-green rim -> mostly
-                  // removed; slightly green suit edge -> barely touched).
+                const minRB = r < b ? r : b;
+                // Greenish/teal rim test: green clearly beats red, and is at
+                // least close to blue (dark teal fringe qualifies). Gray suit
+                // (g barely = r = b) and skin/hair (r >= g) never pass.
+                if (g >= 25 && g >= r * 1.05 && g >= b * 0.92) {
+                  // Falloff: pixels hugging the silhouette get full strength,
+                  // outer ring fades gently so no visible step remains.
+                  const falloff = 1 - (holeDist - 1) / R;
+                  // Strength scales with how green/teal the pixel actually is
+                  // (chroma above the weakest channel), so a barely-green suit
+                  // edge is barely touched while the dark green rim is erased.
+                  const chromaAmt = g - minRB; // 0..255
                   if (EDGE_RIM_STRENGTH > 0) {
-                    const dominance = maxRB > 0 ? (g - maxRB) / maxRB : 1; // 0..
-                    const fade = Math.min(1, dominance * 4) * EDGE_RIM_STRENGTH;
+                    const fade = Math.min(1, chromaAmt / 40) * falloff * EDGE_RIM_STRENGTH;
                     data[i + 3] = Math.round(data[i + 3] * (1 - fade));
                   }
                   // Neutralize remaining green tint so any surviving rim
                   // pixel blends with the suit/hair instead of glowing green.
-                  if (EDGE_DESPILL > 0) {
-                    data[i + 1] = Math.round(g - (g - maxRB) * EDGE_DESPILL);
+                  if (EDGE_DESPILL > 0 && g > maxRB) {
+                    data[i + 1] = Math.round(g - (g - maxRB) * EDGE_DESPILL * falloff);
                   }
                 }
               }

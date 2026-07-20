@@ -97,6 +97,7 @@ export type RootStackParamList = {
     presentationJson?: any;
     videoUrl?: string;
     startFullscreen?: boolean;
+    subjectName?: string;
     topicId?: string;
     chapterId?: string;
     subjectId?: string;

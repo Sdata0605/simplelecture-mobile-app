@@ -3107,6 +3107,7 @@ export default function TopicDetailsScreen() {
             topicId: topicId || undefined,
             chapterId: routeChapterId || topic?.chapter_id || undefined,
             subjectId: subjectId || undefined,
+            subjectName: resolveSubjectName(),
             courseId: languageCourseId || undefined,
             topicTitle: video.title || topic?.title || 'AI Lecture',
             initialLanguage: selectedAILanguage || 'english',
