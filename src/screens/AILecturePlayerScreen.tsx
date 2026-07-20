@@ -19,7 +19,8 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Video, ResizeMode, AVPlaybackStatus } from 'expo-av';
-import { ChromaKeyVideo, ChromaKeyVideoRef } from '../components/ChromaKeyVideo';
+import { ChromaKeyVideo, ChromaKeyVideoRef, ChromaKeySettings } from '../components/ChromaKeyVideo';
+import { supabase } from '../services/supabase';
 import { LatexText } from '../components/LatexText';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp, useFocusEffect, CommonActions } from '@react-navigation/native';
@@ -285,6 +286,39 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
   const params: any = embedded ? props : (route.params || {});
   const { presentationUrl, presentationJson, videoUrl, jobId: passedJobId, topicTitle, startFullscreen, initialLanguage, topicId, chapterId, subjectId, courseId } = params;
   const [selectedLanguage, setSelectedLanguage] = useState(initialLanguage || 'english');
+
+  // Per-subject green-removal profiles. Social Science is LOCKED to the
+  // current baseline (empty override = component defaults, i.e. today's
+  // exact behavior). Maths and Science have their own entries that can be
+  // tuned independently without ever affecting Social Science. Unknown
+  // subjects use the default profile.
+  const CHROMA_PROFILES: Record<'socialScience' | 'maths' | 'science' | 'default', ChromaKeySettings> = {
+    socialScience: {}, // existing settings - do not change
+    maths: {},         // tune here for Maths only
+    science: {},       // tune here for Science only
+    default: {},
+  };
+  const profileForSubjectName = (name?: string | null): ChromaKeySettings => {
+    const n = (name || '').toLowerCase();
+    if (n.includes('social')) return CHROMA_PROFILES.socialScience;
+    if (n.includes('math')) return CHROMA_PROFILES.maths;
+    if (n.includes('science')) return CHROMA_PROFILES.science;
+    return CHROMA_PROFILES.default;
+  };
+  const [chromaProfile, setChromaProfile] = useState<ChromaKeySettings>(CHROMA_PROFILES.default);
+  useEffect(() => {
+    let cancelled = false;
+    if (!subjectId) return;
+    supabase.getSubjectName(subjectId).then((res) => {
+      if (cancelled || !res.success || !res.subjectName) return;
+      const profile = profileForSubjectName(res.subjectName);
+      // Only update if the profile actually differs - identical settings must
+      // not remount the avatar WebViews mid-playback.
+      setChromaProfile((prev) => JSON.stringify(prev) === JSON.stringify(profile) ? prev : profile);
+      console.log('[AILecturePlayer] Chroma profile for subject', res.subjectName, ':', JSON.stringify(profile));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [subjectId]);
   
   // Extract jobId from videoUrl if not directly provided
   const jobId = passedJobId || extractJobIdFromUrl(videoUrl);
@@ -2357,6 +2391,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
               isMuted={!isAActive}
               greenThreshold={0.95}
               greenMultiplier={1.3}
+              chromaSettings={chromaProfile}
               onError={() => {
                 console.log('[AILecturePlayer] Avatar A load error');
                 setAvatarLoadError(true);
@@ -2413,6 +2448,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
               isMuted={isAActive}
               greenThreshold={0.95}
               greenMultiplier={1.3}
+              chromaSettings={chromaProfile}
               onError={() => {
                 console.log('[AILecturePlayer] Avatar B load error');
                 setAvatarLoadError(true);

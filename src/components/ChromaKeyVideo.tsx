@@ -3,6 +3,32 @@ import { View, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { AVPlaybackStatus, AVPlaybackStatusSuccess } from 'expo-av';
 
+// Tunable green-removal settings. All optional; defaults match the shared
+// baseline used app-wide. Per-subject profiles pass overrides here.
+export interface ChromaKeySettings {
+  sensitivity?: number;          // overall key strength multiplier (0..1)
+  hueMin?: number;               // core green hue range (degrees)
+  hueMax?: number;
+  satMin?: number;               // saturation floor for keyable pixels
+  lightMin?: number;             // lightness clamp
+  lightMax?: number;
+  edgeRange?: number;            // soft hue band outside core range (degrees)
+  greenDominance?: number;       // green must exceed max(r,b) * this factor
+  detectMinGreenFraction?: number; // border green fraction to enable keying
+}
+
+export const DEFAULT_CHROMA_SETTINGS: Required<ChromaKeySettings> = {
+  sensitivity: 0.95,
+  hueMin: 80,
+  hueMax: 160,
+  satMin: 0.25,
+  lightMin: 0.08,
+  lightMax: 0.90,
+  edgeRange: 10,
+  greenDominance: 1.05,
+  detectMinGreenFraction: 0.35,
+};
+
 export interface ChromaKeyVideoRef {
   playAsync: () => Promise<AVPlaybackStatus>;
   pauseAsync: () => Promise<AVPlaybackStatus>;
@@ -21,6 +47,7 @@ interface ChromaKeyVideoProps {
   onError?: (error: string) => void;
   greenThreshold?: number;
   greenMultiplier?: number;
+  chromaSettings?: ChromaKeySettings;
 }
 
 const generateChromaKeyHTML = (
@@ -28,7 +55,8 @@ const generateChromaKeyHTML = (
   isLooping: boolean,
   isMuted: boolean,
   greenThreshold: number,
-  greenMultiplier: number
+  greenMultiplier: number,
+  cs: Required<ChromaKeySettings>
 ) => `
 <!DOCTYPE html>
 <html>
@@ -76,16 +104,17 @@ const generateChromaKeyHTML = (
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     
-    const SENSITIVITY = ${greenThreshold};
+    const SENSITIVITY = ${cs.sensitivity};
     
     // Tightened key range: only strongly-green pixels are keyed so desaturated
-    // suit/skin/shadow tones are never eaten. (Was 70-170 / SAT 0.10.)
-    const HUE_MIN = 80;
-    const HUE_MAX = 160;
-    const SAT_MIN = 0.25;
-    const LIGHT_MIN = 0.08;
-    const LIGHT_MAX = 0.90;
-    const EDGE_RANGE = 10;
+    // suit/skin/shadow tones are never eaten. Values are injected per profile.
+    const HUE_MIN = ${cs.hueMin};
+    const HUE_MAX = ${cs.hueMax};
+    const SAT_MIN = ${cs.satMin};
+    const LIGHT_MIN = ${cs.lightMin};
+    const LIGHT_MAX = ${cs.lightMax};
+    const EDGE_RANGE = ${cs.edgeRange};
+    const GREEN_DOMINANCE = ${cs.greenDominance};
     
     // Green-screen auto-detection: keying only runs if the video's border
     // regions are dominated by chroma green. Videos without a green screen
@@ -101,7 +130,7 @@ const generateChromaKeyHTML = (
     const DETECT_DENSE_FRAMES = 30;    // check every frame for the first ~1s
     const DETECT_RECHECK_INTERVAL = 15;
     const DETECT_GIVE_UP_FRAMES = 300; // ~10s: after this, lock keying off
-    const DETECT_MIN_GREEN_FRACTION = 0.35;
+    const DETECT_MIN_GREEN_FRACTION = ${cs.detectMinGreenFraction};
     const DETECT_STREAK_NEEDED = 2;
     
     function isChromaGreen(r, g, b) {
@@ -241,7 +270,7 @@ const generateChromaKeyHTML = (
             const maxRB = r > b ? r : b;
             // Require green to clearly dominate red AND blue - gray suit,
             // skin, and shadow tones never pass this.
-            if (g < maxRB * 1.05) continue;
+            if (g < maxRB * GREEN_DOMINANCE) continue;
             
             const rn = r / 255;
             const gn = g / 255;
@@ -472,6 +501,7 @@ export const ChromaKeyVideo = forwardRef<ChromaKeyVideoRef, ChromaKeyVideoProps>
   onError,
   greenThreshold = 0.95,
   greenMultiplier = 1.3,
+  chromaSettings,
 }, ref) => {
   const webViewRef = useRef<WebView>(null);
   const [isReady, setIsReady] = useState(false);
@@ -608,13 +638,22 @@ export const ChromaKeyVideo = forwardRef<ChromaKeyVideoRef, ChromaKeyVideoProps>
     }
   }, [createStatus, onLoad, onPlaybackStatusUpdate, onError]);
 
+  // Serialize the merged settings so an identical profile object never
+  // triggers a WebView reload (JSON key comparison, not reference).
+  const mergedSettingsJson = useMemo(() => JSON.stringify({
+    ...DEFAULT_CHROMA_SETTINGS,
+    sensitivity: greenThreshold,
+    ...(chromaSettings || {}),
+  }), [greenThreshold, chromaSettings && JSON.stringify(chromaSettings)]);
+
   const html = useMemo(() => generateChromaKeyHTML(
     source.uri,
     isLooping,
     isMuted,
     greenThreshold,
-    greenMultiplier
-  ), [source.uri, isLooping, isMuted, greenThreshold, greenMultiplier]);
+    greenMultiplier,
+    JSON.parse(mergedSettingsJson)
+  ), [source.uri, isLooping, isMuted, greenThreshold, greenMultiplier, mergedSettingsJson]);
 
   return (
     <View style={[styles.container, style]}>
