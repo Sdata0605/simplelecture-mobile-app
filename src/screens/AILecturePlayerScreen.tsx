@@ -294,7 +294,10 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
   // subjects use the default profile.
   const CHROMA_PROFILES: Record<'socialScience' | 'maths' | 'science' | 'default', ChromaKeySettings> = {
     socialScience: {}, // existing settings - do not change
-    maths: {},         // tune here for Maths only
+    // Maths: rim cleanup enabled to remove the dark green border around the
+    // avatar silhouette. Only touches pixels adjacent to transparency, so the
+    // body stays solid (no patches).
+    maths: { edgeCleanRadius: 2, edgeDespill: 0.85, edgeRimStrength: 0.85 },
     science: {},       // tune here for Science only
     default: {},
   };

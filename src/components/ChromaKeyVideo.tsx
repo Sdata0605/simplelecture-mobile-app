@@ -15,6 +15,12 @@ export interface ChromaKeySettings {
   edgeRange?: number;            // soft hue band outside core range (degrees)
   greenDominance?: number;       // green must exceed max(r,b) * this factor
   detectMinGreenFraction?: number; // border green fraction to enable keying
+  // Edge cleanup (all OFF by default - other subjects are bit-identical).
+  // Runs a second pass ONLY on opaque pixels that touch transparency
+  // (the silhouette rim), so it can never punch holes in the body interior.
+  edgeCleanRadius?: number;      // px radius to look for transparency; 0 = off
+  edgeDespill?: number;          // 0..1: suppress green tint on rim pixels
+  edgeRimStrength?: number;      // 0..1: fade out green-dominant rim pixels
 }
 
 export const DEFAULT_CHROMA_SETTINGS: Required<ChromaKeySettings> = {
@@ -27,6 +33,9 @@ export const DEFAULT_CHROMA_SETTINGS: Required<ChromaKeySettings> = {
   edgeRange: 10,
   greenDominance: 1.05,
   detectMinGreenFraction: 0.35,
+  edgeCleanRadius: 0,
+  edgeDespill: 0,
+  edgeRimStrength: 0,
 };
 
 export interface ChromaKeyVideoRef {
@@ -115,6 +124,14 @@ const generateChromaKeyHTML = (
     const LIGHT_MAX = ${cs.lightMax};
     const EDGE_RANGE = ${cs.edgeRange};
     const GREEN_DOMINANCE = ${cs.greenDominance};
+${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0) ? `
+    // Rim cleanup (emitted only for profiles that enable it).
+    const EDGE_CLEAN_RADIUS = ${cs.edgeCleanRadius};
+    const EDGE_DESPILL = ${cs.edgeDespill};
+    const EDGE_RIM_STRENGTH = ${cs.edgeRimStrength};
+    // Reused across frames; resized only when video dimensions change.
+    let rimAlphaSnap = null;
+` : ''}
     
     // Green-screen auto-detection: keying only runs if the video's border
     // regions are dominated by chroma green. Videos without a green screen
@@ -328,6 +345,66 @@ const generateChromaKeyHTML = (
               }
             }
           }
+          
+${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0) ? `
+          // Rim cleanup pass: remove the dark-green border left on the
+          // silhouette. Only touches near-opaque pixels that have a
+          // transparent pixel within EDGE_CLEAN_RADIUS, and each frame is
+          // recomputed from the source video, so erosion never accumulates.
+          {
+            const w = canvas.width;
+            const hgt = canvas.height;
+            const n = w * hgt;
+            // Snapshot alpha so rim edits don't cascade inward. Buffer is
+            // reused across frames to avoid per-frame allocation/GC churn.
+            if (!rimAlphaSnap || rimAlphaSnap.length !== n) rimAlphaSnap = new Uint8Array(n);
+            const alphaSnap = rimAlphaSnap;
+            for (let p = 0; p < n; p++) alphaSnap[p] = data[p * 4 + 3];
+            const R = EDGE_CLEAN_RADIUS;
+            for (let y = 0; y < hgt; y++) {
+              const row = y * w;
+              for (let x = 0; x < w; x++) {
+                const p = row + x;
+                // Only touch near-opaque pixels: half-keyed interior noise
+                // (compression speckle) is left alone so it can't be eroded
+                // into visible patches.
+                if (alphaSnap[p] < 200) continue;
+                // Near transparency? Check a cross + diagonal at radius R.
+                let nearHole = false;
+                for (let d = 1; d <= R && !nearHole; d++) {
+                  nearHole =
+                    (x - d >= 0 && alphaSnap[p - d] < 40) ||
+                    (x + d < w && alphaSnap[p + d] < 40) ||
+                    (y - d >= 0 && alphaSnap[p - d * w] < 40) ||
+                    (y + d < hgt && alphaSnap[p + d * w] < 40) ||
+                    (x - d >= 0 && y - d >= 0 && alphaSnap[p - d * w - d] < 40) ||
+                    (x + d < w && y - d >= 0 && alphaSnap[p - d * w + d] < 40) ||
+                    (x - d >= 0 && y + d < hgt && alphaSnap[p + d * w - d] < 40) ||
+                    (x + d < w && y + d < hgt && alphaSnap[p + d * w + d] < 40);
+                }
+                if (!nearHole) continue;
+                const i = p * 4;
+                const r = data[i], g = data[i + 1], b = data[i + 2];
+                const maxRB = r > b ? r : b;
+                if (g > maxRB) {
+                  // Greenish rim pixel. Fade it out proportionally to how
+                  // green-dominant it is (dark chroma-green rim -> mostly
+                  // removed; slightly green suit edge -> barely touched).
+                  if (EDGE_RIM_STRENGTH > 0) {
+                    const dominance = maxRB > 0 ? (g - maxRB) / maxRB : 1; // 0..
+                    const fade = Math.min(1, dominance * 4) * EDGE_RIM_STRENGTH;
+                    data[i + 3] = Math.round(data[i + 3] * (1 - fade));
+                  }
+                  // Neutralize remaining green tint so any surviving rim
+                  // pixel blends with the suit/hair instead of glowing green.
+                  if (EDGE_DESPILL > 0) {
+                    data[i + 1] = Math.round(g - (g - maxRB) * EDGE_DESPILL);
+                  }
+                }
+              }
+            }
+          }
+` : ''}
           
           ctx.putImageData(imageData, 0, 0);
           }
