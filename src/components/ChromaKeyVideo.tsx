@@ -78,12 +78,82 @@ const generateChromaKeyHTML = (
     
     const SENSITIVITY = ${greenThreshold};
     
-    const HUE_MIN = 70;
-    const HUE_MAX = 170;
-    const SAT_MIN = 0.10;
-    const LIGHT_MIN = 0.05;
+    // Tightened key range: only strongly-green pixels are keyed so desaturated
+    // suit/skin/shadow tones are never eaten. (Was 70-170 / SAT 0.10.)
+    const HUE_MIN = 80;
+    const HUE_MAX = 160;
+    const SAT_MIN = 0.25;
+    const LIGHT_MIN = 0.08;
     const LIGHT_MAX = 0.90;
-    const EDGE_RANGE = 15;
+    const EDGE_RANGE = 10;
+    
+    // Green-screen auto-detection: keying only runs if the video's border
+    // regions are dominated by chroma green. Videos without a green screen
+    // render untouched (no patches / bitten edges).
+    // null = undecided, true = key, false = no keying.
+    // Enabling requires 2 consecutive green frames (guards against a single
+    // greenish flash in normal footage). "false" is not permanent early on:
+    // we keep re-checking periodically for ~10s so dark/fade-in intros or a
+    // late-revealed green screen still get keyed.
+    let keyingEnabled = null;
+    let detectFramesChecked = 0;
+    let greenStreak = 0;
+    const DETECT_DENSE_FRAMES = 30;    // check every frame for the first ~1s
+    const DETECT_RECHECK_INTERVAL = 15;
+    const DETECT_GIVE_UP_FRAMES = 300; // ~10s: after this, lock keying off
+    const DETECT_MIN_GREEN_FRACTION = 0.35;
+    const DETECT_STREAK_NEEDED = 2;
+    
+    function isChromaGreen(r, g, b) {
+      // Strongly green: green channel clearly dominates both red and blue.
+      if (g < 60) return false;
+      if (g < r * 1.15 || g < b * 1.15) return false;
+      const rn = r / 255, gn = g / 255, bn = b / 255;
+      const cmax = Math.max(rn, gn, bn), cmin = Math.min(rn, gn, bn);
+      const delta = cmax - cmin;
+      if (delta < 0.1) return false;
+      let h = 60 * (((bn - rn) / delta) + 2); // cmax is green here
+      if (h < HUE_MIN || h > HUE_MAX) return false;
+      const l = (cmax + cmin) / 2;
+      const s = delta / (1 - Math.abs(2 * l - 1));
+      return s >= 0.30;
+    }
+    
+    function detectGreenScreen(data, w, h) {
+      // Zone 1: top band + left/right edge columns (background in typical
+      // green-screen footage where the avatar stands center/bottom).
+      let green = 0, total = 0;
+      const stepX = Math.max(2, Math.floor(w / 40));
+      const stepY = Math.max(2, Math.floor(h / 40));
+      const bandH = Math.max(2, Math.floor(h * 0.12));
+      const bandW = Math.max(2, Math.floor(w * 0.08));
+      function sample(x, y) {
+        const i = (y * w + x) * 4;
+        total++;
+        if (isChromaGreen(data[i], data[i + 1], data[i + 2])) green++;
+      }
+      for (let y = 0; y < bandH; y += stepY)
+        for (let x = 0; x < w; x += stepX) sample(x, y);
+      for (let y = bandH; y < h; y += stepY) {
+        for (let x = 0; x < bandW; x += stepX) sample(x, y);
+        for (let x = w - bandW; x < w; x += stepX) sample(x, y);
+      }
+      if (total > 0 && (green / total) >= DETECT_MIN_GREEN_FRACTION) return true;
+      // Zone 2: sparse full-frame grid, for tight crops where the subject
+      // touches the borders. Needs a higher fraction since the subject
+      // legitimately occupies much of the frame.
+      let gGreen = 0, gTotal = 0;
+      const gStepX = Math.max(4, Math.floor(w / 24));
+      const gStepY = Math.max(4, Math.floor(h / 24));
+      for (let y = 0; y < h; y += gStepY) {
+        for (let x = 0; x < w; x += gStepX) {
+          const i = (y * w + x) * 4;
+          gTotal++;
+          if (isChromaGreen(data[i], data[i + 1], data[i + 2])) gGreen++;
+        }
+      }
+      return gTotal > 0 && (gGreen / gTotal) >= 0.45;
+    }
     
     let animationId = null;
     let isPlaying = false;
@@ -125,20 +195,53 @@ const generateChromaKeyHTML = (
       
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
-      if (!canvasIsTainted) {
+      // Enter while keying is on OR while detection may still flip it on
+      // (provisional-off videos keep re-checking until the give-up frame).
+      // Detection frame bookkeeping happens outside getImageData so
+      // provisional-off videos only pay the pixel-read cost on check frames.
+      let runDetection = false;
+      if (keyingEnabled !== true && detectFramesChecked < DETECT_GIVE_UP_FRAMES) {
+        detectFramesChecked++;
+        runDetection = detectFramesChecked <= DETECT_DENSE_FRAMES ||
+          detectFramesChecked % DETECT_RECHECK_INTERVAL === 0;
+        if (keyingEnabled === null && detectFramesChecked >= DETECT_DENSE_FRAMES) {
+          // Provisionally off; periodic re-checks can still flip it on
+          // until DETECT_GIVE_UP_FRAMES.
+          keyingEnabled = false;
+          sendMessage('debug', { event: 'greenscreen_not_detected_provisional', frames: detectFramesChecked });
+        }
+      }
+      
+      if (!canvasIsTainted && (keyingEnabled === true || runDetection || keyingEnabled === null)) {
         try {
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const data = imageData.data;
           const len = data.length;
           
+          // Decide whether this video actually has a green screen.
+          if (runDetection && keyingEnabled !== true) {
+              if (detectGreenScreen(data, canvas.width, canvas.height)) {
+                greenStreak++;
+                if (greenStreak >= DETECT_STREAK_NEEDED) {
+                  keyingEnabled = true;
+                  sendMessage('debug', { event: 'greenscreen_detected', frames: detectFramesChecked });
+                }
+              } else {
+                greenStreak = 0;
+              }
+          }
+          
+          if (keyingEnabled === true) {
           for (let i = 0; i < len; i += 4) {
             const r = data[i];
             const g = data[i + 1];
             const b = data[i + 2];
             
-            if (g < 10) continue;
+            if (g < 30) continue;
             const maxRB = r > b ? r : b;
-            if (g < maxRB * 0.85) continue;
+            // Require green to clearly dominate red AND blue - gray suit,
+            // skin, and shadow tones never pass this.
+            if (g < maxRB * 1.05) continue;
             
             const rn = r / 255;
             const gn = g / 255;
@@ -168,7 +271,7 @@ const generateChromaKeyHTML = (
             if (s < SAT_MIN) continue;
             
             const inCoreHue = h >= HUE_MIN && h <= HUE_MAX;
-            const satStrength = s > 0.30 ? 1.0 : (s - SAT_MIN) / 0.20;
+            const satStrength = s > 0.45 ? 1.0 : (s - SAT_MIN) / 0.20;
             
             let alpha;
             if (inCoreHue) {
@@ -198,6 +301,7 @@ const generateChromaKeyHTML = (
           }
           
           ctx.putImageData(imageData, 0, 0);
+          }
         } catch (e) {
           canvasIsTainted = true;
           sendMessage('debug', { event: 'canvas_tainted', message: e.message });
