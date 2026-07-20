@@ -21,6 +21,8 @@ export interface ChromaKeySettings {
   edgeCleanRadius?: number;      // px radius to look for transparency; 0 = off
   edgeDespill?: number;          // 0..1: suppress green tint on rim pixels
   edgeRimStrength?: number;      // 0..1: fade out green-dominant rim pixels
+  edgeErode?: number;            // px: unconditionally remove this many edge
+                                 // pixels at the silhouette (blend line), 0 = off
 }
 
 export const DEFAULT_CHROMA_SETTINGS: Required<ChromaKeySettings> = {
@@ -36,6 +38,7 @@ export const DEFAULT_CHROMA_SETTINGS: Required<ChromaKeySettings> = {
   edgeCleanRadius: 0,
   edgeDespill: 0,
   edgeRimStrength: 0,
+  edgeErode: 0,
 };
 
 export interface ChromaKeyVideoRef {
@@ -124,11 +127,12 @@ const generateChromaKeyHTML = (
     const LIGHT_MAX = ${cs.lightMax};
     const EDGE_RANGE = ${cs.edgeRange};
     const GREEN_DOMINANCE = ${cs.greenDominance};
-${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0) ? `
+${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0 || cs.edgeErode > 0) ? `
     // Rim cleanup (emitted only for profiles that enable it).
     const EDGE_CLEAN_RADIUS = ${cs.edgeCleanRadius};
     const EDGE_DESPILL = ${cs.edgeDespill};
     const EDGE_RIM_STRENGTH = ${cs.edgeRimStrength};
+    const EDGE_ERODE = ${cs.edgeErode};
     // Reused across frames; resized only when video dimensions change.
     let rimAlphaSnap = null;
 ` : ''}
@@ -346,7 +350,7 @@ ${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0) ? `
             }
           }
           
-${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0) ? `
+${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0 || cs.edgeErode > 0) ? `
           // Rim cleanup pass: remove the dark-green border left on the
           // silhouette. Only touches near-opaque pixels that have a
           // transparent pixel within EDGE_CLEAN_RADIUS, and each frame is
@@ -386,6 +390,23 @@ ${cs.edgeCleanRadius > 0 && (cs.edgeDespill > 0 || cs.edgeRimStrength > 0) ? `
                 }
                 if (holeDist === 0) continue;
                 const i = p * 4;
+                // Geometric erode: the outermost EDGE_ERODE pixels of the
+                // silhouette are ALWAYS a body/background blend (that's what
+                // the surviving thin green line is made of), so remove them
+                // unconditionally - no color test can be trusted there.
+                if (EDGE_ERODE > 0) {
+                  if (holeDist <= EDGE_ERODE) {
+                    data[i + 3] = 0;
+                    continue;
+                  }
+                  // Feather the next 2px inward so the new edge is soft
+                  // rather than a hard staircase.
+                  if (holeDist === EDGE_ERODE + 1) {
+                    data[i + 3] = Math.round(data[i + 3] * 0.45);
+                  } else if (holeDist === EDGE_ERODE + 2) {
+                    data[i + 3] = Math.round(data[i + 3] * 0.8);
+                  }
+                }
                 const r = data[i], g = data[i + 1], b = data[i + 2];
                 const maxRB = r > b ? r : b;
                 const minRB = r < b ? r : b;

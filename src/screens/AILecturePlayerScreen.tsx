@@ -301,7 +301,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
     // Maths: rim cleanup enabled to remove the dark green border around the
     // avatar silhouette. Only touches pixels adjacent to transparency, so the
     // body stays solid (no patches).
-    maths: { edgeCleanRadius: 4, edgeDespill: 0.9, edgeRimStrength: 0.9 },
+    maths: { edgeCleanRadius: 4, edgeDespill: 0.9, edgeRimStrength: 0.9, edgeErode: 1 },
     science: {},       // tune here for Science only
     default: {},
   };
