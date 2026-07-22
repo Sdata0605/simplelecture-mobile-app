@@ -1,17 +1,12 @@
 /**
  * Slide-presentation player for a Doubts answer's `slide_preview`.
  *
- * KEY FIXES (over the original):
- * - Segmented progress bar: one tappable segment per slide — tap any segment
- *   to jump straight to that slide (plays if already playing, browses if not).
- * - Prev/next are now fully async so the generation bump always completes
- *   before the next slide starts loading — no double-audio window.
- * - Controls wrapped in a plain View; TouchableOpacity uses activeOpacity so
- *   they receive taps reliably even when the card is inside a ScrollView.
- * - Generation-ref teardown convention preserved throughout.
+ * Progress bar: a single tappable strip. Tap anywhere to jump to the slide
+ * that falls at that point in time. Fill = (elapsed + positionSec) / total.
+ * Prev / next / play controls are fully async (generation-ref teardown).
  */
 import { useEffect, useMemo, useRef, useState, useCallback, memo } from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, Image, TouchableOpacity, StyleSheet, LayoutChangeEvent } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import { DoubtSlidePreview } from '../../utils/doubtThreads';
@@ -21,7 +16,6 @@ const NO_AUDIO_SLIDE_SECONDS = 6;
 const colors = {
   primary: '#2BBD6E',
   primaryLight: '#DCFCE7',
-  primaryMid: '#86EFAC',
   text: '#1F2937',
   textSecondary: '#6B7280',
   border: '#E5E7EB',
@@ -38,12 +32,12 @@ const SlidePreviewPlayer = memo(({ preview }: SlidePreviewPlayerProps) => {
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [positionSec, setPositionSec] = useState(0);
+  // Measured pixel width of the progress bar for tap-to-seek math.
+  const [barWidth, setBarWidth] = useState(0);
 
   const generationRef = useRef(0);
   const soundRef = useRef<Audio.Sound | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Keep a ref so async callbacks always read the latest index without
-  // creating stale-closure bugs.
   const indexRef = useRef(0);
   indexRef.current = index;
   const playingRef = useRef(false);
@@ -80,15 +74,11 @@ const SlidePreviewPlayer = memo(({ preview }: SlidePreviewPlayerProps) => {
     [slideDurations]
   );
 
-  // ─── audio teardown ───────────────────────────────────────────────────────
+  // ─── teardown ─────────────────────────────────────────────────────────────
 
-  /** Synchronously bumps the generation (invalidating any in-flight async ops)
-   *  then fires-and-forgets the audio unload. Returns the NEW generation so
-   *  callers can capture it before starting the next load. */
   const stopEverything = useCallback((): number => {
     const newGen = generationRef.current + 1;
     generationRef.current = newGen;
-
     if (fallbackTimerRef.current) {
       clearTimeout(fallbackTimerRef.current);
       fallbackTimerRef.current = null;
@@ -109,7 +99,7 @@ const SlidePreviewPlayer = memo(({ preview }: SlidePreviewPlayerProps) => {
   // ─── playback ─────────────────────────────────────────────────────────────
 
   const playSlide = useCallback(async (i: number) => {
-    const myGen = stopEverything();          // sync bump; new generation captured
+    const myGen = stopEverything();
     setIndex(i);
     setPositionSec(0);
     setPlaying(true);
@@ -118,7 +108,6 @@ const SlidePreviewPlayer = memo(({ preview }: SlidePreviewPlayerProps) => {
     if (!narration) {
       fallbackTimerRef.current = setTimeout(() => {
         if (generationRef.current !== myGen) return;
-        // advance or stop at end
         const next = i + 1;
         if (next < slides.length) {
           playSlide(next);
@@ -180,7 +169,7 @@ const SlidePreviewPlayer = memo(({ preview }: SlidePreviewPlayerProps) => {
     }
   }, [audioByIndex, slides.length, slideDurations, stopEverything]);
 
-  // ─── control handlers (all fully async) ──────────────────────────────────
+  // ─── control handlers ─────────────────────────────────────────────────────
 
   const handlePlayPause = useCallback(() => {
     if (playingRef.current) {
@@ -214,23 +203,50 @@ const SlidePreviewPlayer = memo(({ preview }: SlidePreviewPlayerProps) => {
     }
   }, [playSlide, slides.length, stopEverything]);
 
-  /** Jump to a specific slide by tapping its segment. */
-  const handleSegmentPress = useCallback((i: number) => {
+  /**
+   * Tap anywhere on the progress bar → map tap X to a time fraction →
+   * find which slide owns that time → jump there.
+   */
+  const handleBarPress = useCallback((e: { nativeEvent: { locationX: number } }) => {
+    if (barWidth <= 0 || totalSeconds <= 0) return;
+    const fraction = Math.min(1, Math.max(0, e.nativeEvent.locationX / barWidth));
+    const targetSec = fraction * totalSeconds;
+
+    // Walk slides to find which slide owns targetSec.
+    let elapsed = 0;
+    let targetIndex = slides.length - 1;
+    for (let i = 0; i < slides.length; i++) {
+      const end = elapsed + slideDurations[i];
+      if (targetSec <= end) {
+        targetIndex = i;
+        break;
+      }
+      elapsed = end;
+    }
+
     if (playingRef.current) {
-      playSlide(i);
+      playSlide(targetIndex);
     } else {
       stopEverything();
-      setIndex(i);
+      setIndex(targetIndex);
       setPositionSec(0);
     }
-  }, [playSlide, stopEverything]);
+  }, [barWidth, totalSeconds, slides.length, slideDurations, playSlide, stopEverything]);
 
-  // ─── derived render values ────────────────────────────────────────────────
+  const handleBarLayout = useCallback((e: LayoutChangeEvent) => {
+    setBarWidth(e.nativeEvent.layout.width);
+  }, []);
+
+  // ─── progress fraction ────────────────────────────────────────────────────
+
+  const progress = totalSeconds > 0
+    ? Math.min(1, (elapsedBefore(index) + positionSec) / totalSeconds)
+    : 0;
+
+  // ─── render ───────────────────────────────────────────────────────────────
 
   const slide = slides[index];
   const imageUrl = preview.image_urls?.[String(index)]?.url ?? slide?.infographicUrl;
-
-  // ─── render ───────────────────────────────────────────────────────────────
 
   return (
     <View style={styles.card}>
@@ -258,72 +274,18 @@ const SlidePreviewPlayer = memo(({ preview }: SlidePreviewPlayerProps) => {
         </View>
       )}
 
-      {/* ── Segmented tappable progress bar ── */}
-      <View style={styles.segmentedBar}>
-        {slides.map((_, i) => {
-          const segWidth = totalSeconds > 0
-            ? `${(slideDurations[i] / totalSeconds) * 100}%`
-            : `${100 / slides.length}%`;
-
-          // Fill state for this segment
-          let fillStyle;
-          if (i < index) {
-            // already passed
-            fillStyle = styles.segFillDone;
-          } else if (i === index) {
-            // active — fill proportionally to position within slide
-            const slideDur = slideDurations[i];
-            const fillPct = slideDur > 0
-              ? Math.min(1, positionSec / slideDur) * 100
-              : (playing ? 100 : 0);
-            fillStyle = [styles.segFillActive, { width: `${fillPct}%` as any }];
-          } else {
-            fillStyle = null;
-          }
-
-          const isFirst = i === 0;
-          const isLast = i === slides.length - 1;
-
-          return (
-            <TouchableOpacity
-              key={i}
-              activeOpacity={0.7}
-              onPress={() => handleSegmentPress(i)}
-              style={[
-                styles.segment,
-                { width: segWidth as any },
-                isFirst && styles.segFirst,
-                isLast && styles.segLast,
-                i === index && styles.segActive,
-              ]}
-            >
-              {/* filled portion */}
-              {i < index && (
-                <View style={[StyleSheet.absoluteFill, styles.segFillDone]} />
-              )}
-              {i === index && (
-                <View
-                  style={[
-                    StyleSheet.absoluteFill,
-                    styles.segFillActive,
-                    {
-                      width: `${
-                        slideDurations[i] > 0
-                          ? Math.min(100, (positionSec / slideDurations[i]) * 100)
-                          : playing ? 100 : 0
-                      }%`,
-                    },
-                  ]}
-                />
-              )}
-              {/* slide number dot — only on wider screens */}
-              {slides.length <= 8 && (
-                <Text style={styles.segLabel}>{i + 1}</Text>
-              )}
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      {/* Single tappable progress bar */}
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={handleBarPress}
+        onLayout={handleBarLayout}
+        style={styles.progressTrack}
+        testID="progress-bar"
+      >
+        <View style={styles.progressRail}>
+          <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+        </View>
+      </TouchableOpacity>
 
       {/* Controls */}
       <View style={styles.controlsRow}>
@@ -426,52 +388,23 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
 
-  // ── Segmented bar ──
-  segmentedBar: {
-    flexDirection: 'row',
-    height: 28,           // tall enough to tap comfortably
+  // ── Progress bar ──
+  progressTrack: {
+    height: 20,             // tall hit area so fingers can tap easily
     marginTop: 10,
     marginBottom: 2,
-    gap: 2,
-    alignItems: 'stretch',
-  },
-  segment: {
-    flex: 1,              // overridden by explicit width below
-    height: '100%',
-    backgroundColor: colors.track,
-    borderRadius: 3,
-    overflow: 'hidden',
     justifyContent: 'center',
-    alignItems: 'center',
   },
-  segFirst: {
-    borderTopLeftRadius: 6,
-    borderBottomLeftRadius: 6,
+  progressRail: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.track,
+    overflow: 'hidden',
   },
-  segLast: {
-    borderTopRightRadius: 6,
-    borderBottomRightRadius: 6,
-  },
-  segActive: {
-    // slightly raised for the current slide
-    borderColor: colors.primary,
-    borderWidth: 1,
-  },
-  segFillDone: {
-    backgroundColor: colors.primaryMid,
-  },
-  segFillActive: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    bottom: 0,
+  progressFill: {
+    height: 6,
+    borderRadius: 3,
     backgroundColor: colors.primary,
-  },
-  segLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.textSecondary,
-    zIndex: 1,
   },
 
   // ── Controls ──
@@ -480,7 +413,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 20,
-    marginTop: 8,
+    marginTop: 4,
   },
   controlButton: {
     width: 36,
