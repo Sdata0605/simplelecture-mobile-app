@@ -296,7 +296,7 @@ const SlidePreviewPlayer = memo(({ preview }: SlidePreviewPlayerProps) => {
           style={[styles.controlButton, index === 0 && styles.controlDisabled]}
           testID="button-slide-prev"
         >
-          <Ionicons name="play-skip-back" size={18} color={colors.primary} />
+          <Ionicons name="play-skip-back" size={14} color={colors.primary} />
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -305,7 +305,7 @@ const SlidePreviewPlayer = memo(({ preview }: SlidePreviewPlayerProps) => {
           style={styles.playButton}
           testID="button-slide-play"
         >
-          <Ionicons name={playing ? 'stop' : 'play'} size={20} color="#FFFFFF" />
+          <Ionicons name={playing ? 'stop' : 'play'} size={16} color="#FFFFFF" />
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -315,7 +315,7 @@ const SlidePreviewPlayer = memo(({ preview }: SlidePreviewPlayerProps) => {
           style={[styles.controlButton, index === slides.length - 1 && styles.controlDisabled]}
           testID="button-slide-next"
         >
-          <Ionicons name="play-skip-forward" size={18} color={colors.primary} />
+          <Ionicons name="play-skip-forward" size={14} color={colors.primary} />
         </TouchableOpacity>
       </View>
 
@@ -416,9 +416,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   controlButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
@@ -427,9 +427,9 @@ const styles = StyleSheet.create({
     opacity: 0.35,
   },
   playButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
