@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Platform, AppState } from 'react-native';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
+import { type EventSubscription } from 'expo-modules-core';
 import Constants from 'expo-constants';
 import {
   saveNotification,
@@ -16,8 +17,8 @@ export function useNotifications() {
   const [notification, setNotification] = useState<Notifications.Notification | null>(null);
   const [notifications, setNotifications] = useState<StoredNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
-  const notificationListener = useRef<Notifications.EventSubscription>();
-  const responseListener = useRef<Notifications.EventSubscription>();
+  const notificationListener = useRef<EventSubscription | undefined>(undefined);
+  const responseListener = useRef<EventSubscription | undefined>(undefined);
   const lastResponseId = useRef<string | null>(null);
 
   const refreshNotifications = useCallback(async () => {
@@ -61,10 +62,10 @@ export function useNotifications() {
 
     return () => {
       if (notificationListener.current) {
-        Notifications.removeNotificationSubscription(notificationListener.current);
+        notificationListener.current.remove();
       }
       if (responseListener.current) {
-        Notifications.removeNotificationSubscription(responseListener.current);
+        responseListener.current.remove();
       }
       subscription.remove();
     };
