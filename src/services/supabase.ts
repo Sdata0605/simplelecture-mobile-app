@@ -321,6 +321,14 @@ export interface PregenSuggestion {
   topicId: string | null;
 }
 
+// One row from the live type-ahead question search (qa_cache_results).
+export interface QuestionSearchResult {
+  cacheId: string;
+  question: string;
+  similarity?: number;
+  accessTier?: string;
+}
+
 export interface TTSResponse {
   audioContent: string[];
   isChunked: boolean;
@@ -2271,6 +2279,54 @@ class SupabaseService {
       return { success: true, questions, pending };
     } catch (e) {
       console.warn('[AI] getReadyPregenQuestions failed:', e);
+      return { success: false, error: 'network' };
+    }
+  }
+
+  // Live type-ahead question search for the AI tab overlay. Hits the external
+  // search-questions endpoint (plain HTTP) through the ai-teaching-proxy edge
+  // function to avoid cleartext/mixed-content failures on device. Short queries
+  // legitimately return empty arrays — that is not an error.
+  async searchQuestions(params: {
+    q: string;
+    subjectId: string;
+    limit?: number;
+    signal?: AbortSignal;
+  }): Promise<{ success: boolean; results?: QuestionSearchResult[]; error?: string }> {
+    try {
+      const apiBase = 'http://116.202.230.124:8000';
+      const qs = new URLSearchParams();
+      qs.set('q', params.q);
+      qs.set('subject_id', params.subjectId);
+      qs.set('limit', String(params.limit ?? 20));
+      const apiPath = `/search-questions?${qs.toString()}`;
+      const proxyUrl =
+        `${SUPABASE_DIRECT_URL}/functions/v1/ai-teaching-proxy` +
+        `?path=${encodeURIComponent(apiPath)}&base=${encodeURIComponent(apiBase)}`;
+
+      const response = await fetch(proxyUrl, {
+        method: 'GET',
+        headers: { ...this.headers, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
+        signal: params.signal,
+      });
+      if (!response.ok) {
+        console.warn('[AI] searchQuestions proxy status', response.status);
+        return { success: false, error: `proxy ${response.status}` };
+      }
+      const data = await response.json();
+      const arr: any[] = Array.isArray(data?.qa_cache_results) ? data.qa_cache_results : [];
+      const results: QuestionSearchResult[] = arr
+        .map((r) => ({
+          cacheId: r?.cache_id || r?.question_hash || '',
+          question: r?.question || '',
+          similarity: typeof r?.similarity === 'number' ? r.similarity : undefined,
+          accessTier: r?.access_tier,
+        }))
+        .filter((r) => r.cacheId && r.question);
+      return { success: true, results };
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return { success: false, error: 'aborted' };
+      console.warn('[AI] searchQuestions failed:', e);
       return { success: false, error: 'network' };
     }
   }

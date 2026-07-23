@@ -47,48 +47,6 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
-// Common words ignored when matching the typed query against the question bank,
-// so short connective words don't drown out the meaningful terms.
-const AI_SUGGEST_STOP_WORDS = new Set([
-  'the', 'is', 'a', 'an', 'of', 'what', 'which', 'to', 'and', 'in', 'on', 'for',
-  'how', 'do', 'does', 'are', 'was', 'were', 'be', 'that', 'this', 'it', 'as',
-  'at', 'by', 'or', 'we', 'can', 'i', 'explain', 'define', 'why', 'when', 'with',
-  'from', 'about',
-]);
-
-// Local matcher for the real-time suggestion overlay: every meaningful term in
-// the query must appear in the question text; results are ranked (prefix /
-// word-start boosts) and capped at 5. Runs on the cached bank, no network.
-function matchQuestions(
-  bank: { id: string; text: string }[],
-  query: string,
-): { id: string; text: string }[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
-  const tokens = q
-    .split(/\s+/)
-    .filter((t) => t.length > 0 && !AI_SUGGEST_STOP_WORDS.has(t));
-  const terms = tokens.length > 0 ? tokens : [q];
-  const scored: { item: { id: string; text: string }; score: number }[] = [];
-  for (const item of bank) {
-    const text = item.text.toLowerCase();
-    let score = 0;
-    let allMatch = true;
-    for (const term of terms) {
-      const idx = text.indexOf(term);
-      if (idx === -1) {
-        allMatch = false;
-        break;
-      }
-      score += term.length + (idx === 0 ? 5 : 0);
-    }
-    if (!allMatch) continue;
-    if (text.startsWith(q)) score += 20;
-    scored.push({ item, score });
-  }
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, 5).map((s) => s.item);
-}
 import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
@@ -641,15 +599,14 @@ export default function TopicDetailsScreen() {
   // Pre-generated, ready-to-play question suggestions for this subject/topic.
   // Tapping one loads its cached presentation instantly (see handleSelectSuggestion).
   const [aiSuggestions, setAiSuggestions] = useState<PregenSuggestion[]>([]);
-  // Full subject/topic question bank powering the real-time suggestion overlay.
-  // Loaded once when the AI tab opens; matching runs locally on each keystroke.
-  const [aiQuestionBank, setAiQuestionBank] = useState<{ id: string; text: string }[]>([]);
-  // Subset of bank question ids that already have a pre-generated presentation
-  // cached in the DB — those play instantly on tap, so we badge them "Ready".
-  const [aiReadyIds, setAiReadyIds] = useState<Set<string>>(new Set());
-  // Tracks which subject/topic the cached bank belongs to, so navigating to a
-  // different topic/subject (same mounted screen) triggers a refetch.
-  const aiBankKeyRef = useRef<string | null>(null);
+  // Live server-side search results powering the real-time suggestion overlay.
+  // Refreshed per keystroke (debounced) from the search-questions endpoint.
+  const [aiSearchResults, setAiSearchResults] = useState<{ id: string; text: string }[]>([]);
+  // Monotonic sequence so only the NEWEST in-flight search may render; fast
+  // typing never shows out-of-order results.
+  const aiSearchSeqRef = useRef(0);
+  // Per-query result cache for instant back-typing (cleared on subject change).
+  const aiSearchCacheRef = useRef<Map<string, { id: string; text: string }[]>>(new Map());
   // Short-lived guard against rapid double-taps on a suggestion (see handler).
   const aiSelectLockRef = useRef(false);
   const [aiInputFocused, setAiInputFocused] = useState(false);
@@ -861,69 +818,65 @@ export default function TopicDetailsScreen() {
     };
   }, [subjectId, topic?.subject_id, topicId]);
 
-  // Load the subject/topic question bank once when the AI tab opens. Powers the
-  // real-time suggestion overlay; matching runs locally so we never re-fetch
-  // while the student types.
+  // Debounce the typed query (~200ms) so we fire at most one search per pause
+  // while still feeling instant.
   useEffect(() => {
-    if (activeTab !== 'ai') return;
-    if (!topicId && !(isChapterMode && subjectId)) return;
-    const bankKey = `${topicId ?? ''}:${isChapterMode ? subjectId ?? '' : ''}`;
-    if (aiBankKeyRef.current === bankKey) return;
-    let cancelled = false;
-    // Drop the previous subject/topic's questions so stale suggestions never flash.
-    setAiQuestionBank([]);
-    setAiReadyIds(new Set());
-    (async () => {
-      try {
-        let items: { id: string; text: string }[] = [];
-        if (topicId) {
-          const res = await supabase.getTopicQuestions(topicId, 'All');
-          if (res.success && res.questions) {
-            items = res.questions.map((q) => ({
-              id: q.id,
-              text: stripEmbeddedOptions(q.question_text, q.options),
-            }));
-          }
-        } else if (isChapterMode && subjectId) {
-          const res = await supabase.getSubjectMCQs(subjectId);
-          if (res.success && res.questions) {
-            items = res.questions.map((q) => ({
-              id: q.id,
-              text: stripEmbeddedOptions(q.question_text, (q as any).options),
-            }));
-          }
-        }
-        if (cancelled) return;
-        items = items.filter((i) => i.text && i.text.trim().length > 0);
-        setAiQuestionBank(items);
-        aiBankKeyRef.current = bankKey;
-        // Flag which questions already have a pre-generated presentation so the
-        // overlay can badge them as instant-play (no AI-server call on tap).
-        try {
-          const ready = await supabase.getCachedQuestionIds(items.map((i) => i.id));
-          if (!cancelled) setAiReadyIds(ready);
-        } catch (badgeErr) {
-          console.warn('[AI] ready-question badge check failed:', badgeErr);
-        }
-      } catch (e) {
-        console.warn('[AI] question bank fetch failed:', e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab, topicId, subjectId, isChapterMode]);
-
-  // Debounce the typed query (~100ms) so live matching stays smooth per keystroke.
-  useEffect(() => {
-    const t = setTimeout(() => setAiDebouncedQuery(aiMessage), 100);
+    const t = setTimeout(() => setAiDebouncedQuery(aiMessage), 200);
     return () => clearTimeout(t);
   }, [aiMessage]);
 
-  const aiMatches = useMemo(
-    () => matchQuestions(aiQuestionBank, aiDebouncedQuery),
-    [aiQuestionBank, aiDebouncedQuery],
-  );
+  // New subject/topic: drop the previous one's cached search results so stale
+  // suggestions never flash.
+  const aiSearchSubjectId = subjectId || topic?.subject_id;
+  useEffect(() => {
+    aiSearchCacheRef.current = new Map();
+    setAiSearchResults([]);
+  }, [aiSearchSubjectId]);
+
+  // Live server-side type-ahead: on each (debounced) keystroke, hit the
+  // search-questions endpoint and show its qa_cache matches in the overlay.
+  // A sequence counter guards against out-of-order responses, and results are
+  // memoized per query for instant back-typing.
+  useEffect(() => {
+    if (activeTab !== 'ai') return;
+    const q = aiDebouncedQuery.trim();
+    if (!q || !aiSearchSubjectId) {
+      setAiSearchResults([]);
+      return;
+    }
+    const cacheKey = `${aiSearchSubjectId}:${q.toLowerCase()}`;
+    const cached = aiSearchCacheRef.current.get(cacheKey);
+    if (cached) {
+      setAiSearchResults(cached);
+      return;
+    }
+    const mySeq = ++aiSearchSeqRef.current;
+    const controller = new AbortController();
+    (async () => {
+      const res = await supabase.searchQuestions({
+        q,
+        subjectId: aiSearchSubjectId,
+        limit: 20,
+        signal: controller.signal,
+      });
+      if (aiSearchSeqRef.current !== mySeq) return; // a newer keystroke won
+      if (res.success && Array.isArray(res.results)) {
+        const items = res.results.map((r) => ({ id: r.cacheId, text: r.question }));
+        aiSearchCacheRef.current.set(cacheKey, items);
+        // Bound the back-typing cache so a long session can't grow unbounded.
+        if (aiSearchCacheRef.current.size > 200) {
+          const firstKey = aiSearchCacheRef.current.keys().next().value;
+          if (firstKey !== undefined) aiSearchCacheRef.current.delete(firstKey);
+        }
+        setAiSearchResults(items);
+      }
+      // On error keep whatever is showing — a transient network blip should
+      // not flicker the overlay away mid-typing.
+    })();
+    return () => controller.abort();
+  }, [activeTab, aiDebouncedQuery, aiSearchSubjectId]);
+
+  const aiMatches = aiSearchResults;
 
   const showAiOverlay = aiInputFocused && !suppressAiSuggestions && aiMatches.length > 0;
 
@@ -4415,12 +4368,6 @@ export default function TopicDetailsScreen() {
                         <Text style={styles.aiSuggestRowText} numberOfLines={2}>
                           {m.text}
                         </Text>
-                      )}
-                      {aiReadyIds.has(m.id) && (
-                        <View style={styles.aiSuggestReadyBadge}>
-                          <Ionicons name="flash" size={10} color={colors.primary} />
-                          <Text style={styles.aiSuggestReadyBadgeText}>Ready</Text>
-                        </View>
                       )}
                     </TouchableOpacity>
                   </View>
