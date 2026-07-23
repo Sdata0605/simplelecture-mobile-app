@@ -278,6 +278,11 @@ export interface PresentationSlide {
   // Narration audio provided by the AI response (preferred over local TTS).
   audioUrl?: string;
   audioDuration?: number; // seconds
+  // Optional Manim animation video for this slide. When present, the player
+  // shows the video (muted) in place of the static infographic, synced with
+  // the narration audio.
+  manimVideoUrl?: string;
+  manimDurationSeconds?: number;
 }
 
 export interface AITeachingAssistantResponse {
@@ -2127,6 +2132,8 @@ class SupabaseService {
         isTips: pick<boolean>(s?.is_tips, s?.isTips) ?? false,
         audioUrl: pick<string>(s?.audioUrl, s?.audio_url),
         audioDuration: pick<number>(s?.duration),
+        manimVideoUrl: pick<string>(s?.manimVideoUrl, s?.manim_video_url),
+        manimDurationSeconds: pick<number>(s?.manimDurationSeconds, s?.manim_duration_seconds),
       };
     });
 

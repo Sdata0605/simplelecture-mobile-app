@@ -27,7 +27,7 @@ import { filterLecturesByVisibility, getTopicLectureVisibility } from '../servic
 import { NotesBookReader } from '../components/learning/notes/NotesBookReader';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
-import { Audio } from 'expo-av';
+import { Audio, Video, ResizeMode } from 'expo-av';
 import * as Speech from 'expo-speech';
 import * as FileSystem from 'expo-file-system';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -674,6 +674,11 @@ export default function TopicDetailsScreen() {
   // Pre-downloaded slide images: maps the original remote image URL to a local
   // cached file URI so each slide's image renders instantly alongside its audio.
   const preloadedImagesRef = useRef<Record<string, string>>({});
+  // Pre-downloaded Manim slide videos: remote URL -> local cached file URI.
+  const preloadedVideosRef = useRef<Record<string, string>>({});
+  // The single mounted Manim <Video> for the CURRENT slide. Only ONE Video may
+  // ever be mounted at a time (Android allows one live decoder surface).
+  const manimVideoRef = useRef<Video | null>(null);
   // Monotonic "playback generation". Bumped by stopPresentationPlayback() to
   // invalidate any in-flight narration chain (async createAsync + auto-advance
   // callbacks all re-check it) so no orphaned sound starts after the user leaves.
@@ -1334,9 +1339,45 @@ export default function TopicDetailsScreen() {
           console.warn('[AIImage] Error downloading slide image:', imgErr);
         }
       };
-      // Priority: the first slide's image(s) — playback waits on these (bounded).
+      // Pre-download Manim slide videos concurrently, same pattern as images.
+      // videoMap is updated incrementally so background downloads become
+      // usable live; playback of the video falls back to the remote URL when
+      // the local copy isn't ready yet.
+      const videoMap: Record<string, string> = {};
+      preloadedVideosRef.current = videoMap;
+      const downloadSlideVideo = async (url: string): Promise<void> => {
+        if (!url || videoMap[url] || !/^https?:\/\//i.test(url)) return;
+        try {
+          const clean = url.split('?')[0];
+          const extMatch = clean.match(/\.(mp4|mov|m4v|webm)$/i);
+          const ext = extMatch ? extMatch[1].toLowerCase() : 'mp4';
+          const target = FileSystem.cacheDirectory + `ai_manim_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+          const dl = await FileSystem.downloadAsync(url, target);
+          if (dl && dl.status === 200) {
+            videoMap[url] = target;
+          } else {
+            console.warn('[AIVideo] Manim video download failed - status', dl?.status);
+          }
+        } catch (vidErr) {
+          console.warn('[AIVideo] Error downloading Manim video:', vidErr);
+        }
+      };
+      // Priority: the first slide's image(s)/video — playback waits on these (bounded).
       const firstSlideImageUrls = slides[0] ? slideRemoteImageUrls(slides[0]) : [];
-      const firstSlideImagesReady = Promise.all(firstSlideImageUrls.map(downloadSlideImage));
+      const firstSlideVideoUrl: string | undefined = (slides[0] as any)?.manimVideoUrl;
+      const firstSlideImagesReady = Promise.all([
+        ...firstSlideImageUrls.map(downloadSlideImage),
+        ...(firstSlideVideoUrl ? [downloadSlideVideo(firstSlideVideoUrl)] : []),
+      ]);
+      // Background: every other slide's Manim video, sequentially (videos are
+      // large; don't starve the audio downloads below).
+      (async () => {
+        for (let i = 1; i < slides.length; i++) {
+          const u = (slides[i] as any)?.manimVideoUrl;
+          if (u && u !== firstSlideVideoUrl) await downloadSlideVideo(u);
+        }
+        console.log('[AIVideo] Background Manim preload complete:', Object.keys(videoMap).length, 'cached');
+      })();
       // Background: every other slide's images (deduped against the first slide).
       const backgroundImageUrls: string[] = [];
       slides.forEach((s: any, idx: number) => {
@@ -1421,6 +1462,33 @@ export default function TopicDetailsScreen() {
     return `data:image/png;base64,${url}`;
   };
 
+  // Resolve the URI to play for a slide's Manim video: prefer the locally
+  // pre-downloaded copy, falling back to the remote URL.
+  const resolveSlideVideoUri = (url: string): string => {
+    return preloadedVideosRef.current[url] || url;
+  };
+
+  // The single Manim <Video> for the current slide. CRITICAL: only ONE of the
+  // player surfaces may mount this at a time (Android allows one live video
+  // decoder). Keyed by slide index so changing slides reloads from 0:00. Muted:
+  // the narration audio is the separate expo-av Sound; play/pause follows
+  // isPlaying, and scrubbing seeks the video imperatively via manimVideoRef.
+  const renderManimVideo = (videoUrl: string, videoStyle: any) => (
+    <Video
+      ref={manimVideoRef}
+      key={`manim-${currentSlideIndex}`}
+      source={{ uri: resolveSlideVideoUri(videoUrl) }}
+      style={videoStyle}
+      resizeMode={ResizeMode.CONTAIN}
+      shouldPlay={isPlaying}
+      isMuted
+      rate={playbackSpeed}
+      shouldCorrectPitch
+      isLooping={false}
+      useNativeControls={false}
+    />
+  );
+
   const handleAskAI = async (questionOverride?: string, skipQuotaGate?: boolean) => {
     // Allow callers (e.g. a tapped suggestion that missed the cache) to supply
     // the question directly, since setAiMessage state may not be flushed yet.
@@ -1458,6 +1526,7 @@ export default function TopicDetailsScreen() {
     setTotalPresentationDuration(0);
     preloadedAudioRef.current = []; // Clear pre-loaded audio
     preloadedImagesRef.current = {}; // Clear pre-loaded slide images
+    preloadedVideosRef.current = {}; // Clear pre-loaded Manim videos
 
     // Reset the navigation-gate state for the new question
     if (aiExpiryTimerRef.current) {
@@ -1608,6 +1677,7 @@ export default function TopicDetailsScreen() {
       setTotalPresentationDuration(0);
       preloadedAudioRef.current = [];
       preloadedImagesRef.current = {};
+      preloadedVideosRef.current = {};
       if (aiExpiryTimerRef.current) {
         clearTimeout(aiExpiryTimerRef.current);
         aiExpiryTimerRef.current = null;
@@ -1753,7 +1823,10 @@ export default function TopicDetailsScreen() {
         const nextSlideIndex = slideIndex + 1;
         const currentAiResponse = aiResponseRef.current;
         const thisSlide = currentAiResponse?.presentationSlides?.[slideIndex];
-        const silentMs = thisSlide?.audioDuration ? Math.round(thisSlide.audioDuration * 1000) : 5000;
+        const silentMs = videoSlideTotalMs(thisSlide);
+        // A silent slide can still carry a Manim video — let it play while the
+        // silent-advance timer runs (shouldPlay follows isPlaying).
+        if (thisSlide?.manimVideoUrl) setIsPlaying(true);
         if (nextSlideIndex < totalSlides && currentAiResponse) {
           if (silentAdvanceTimerRef.current) clearTimeout(silentAdvanceTimerRef.current);
           silentAdvanceTimerRef.current = setTimeout(() => {
@@ -1850,7 +1923,72 @@ export default function TopicDetailsScreen() {
     }
   };
 
+  // (Re)arm the silent-slide auto-advance timer for `delayMs` from now. Used by
+  // the video-only (no narration audio) pause/resume/scrub paths so the slide
+  // still advances after its remaining duration.
+  const armSilentAdvanceTimer = (slideIndex: number, delayMs: number) => {
+    const myGeneration = playbackGenerationRef.current;
+    if (silentAdvanceTimerRef.current) clearTimeout(silentAdvanceTimerRef.current);
+    silentAdvanceTimerRef.current = setTimeout(() => {
+      silentAdvanceTimerRef.current = null;
+      if (playbackGenerationRef.current !== myGeneration) return;
+      const resp = aiResponseRef.current;
+      const totalSlides = resp?.presentationSlides?.length || 0;
+      const nextSlideIndex = slideIndex + 1;
+      if (nextSlideIndex < totalSlides && resp) {
+        setCurrentSlideIndex(nextSlideIndex);
+        const nextSlide = resp.presentationSlides[nextSlideIndex];
+        if (nextSlide) playSlideNarration(nextSlide.narration, nextSlideIndex, totalSlides);
+      } else {
+        setIsPlaying(false);
+        setIsSpeaking(false);
+      }
+    }, Math.max(250, delayMs));
+  };
+
+  // Total intended duration (ms) of a video-only slide: narration duration if
+  // provided, else the Manim video's own duration, else 5s.
+  const videoSlideTotalMs = (slide: PresentationSlide | undefined): number => {
+    if (slide?.audioDuration) return Math.round(slide.audioDuration * 1000);
+    if (slide?.manimDurationSeconds) return Math.round(slide.manimDurationSeconds * 1000);
+    return 5000;
+  };
+
   const togglePlayPause = async () => {
+    // Video-only slide (Manim video, no loaded narration sound): pause/resume
+    // the video directly and manage the silent-advance timer, instead of
+    // restarting the slide from scratch.
+    if (!soundRef.current) {
+      const resp = aiResponseRef.current;
+      const slide = resp?.presentationSlides?.[currentSlideIndex];
+      if (slide?.manimVideoUrl) {
+        if (isPlaying) {
+          if (silentAdvanceTimerRef.current) {
+            clearTimeout(silentAdvanceTimerRef.current);
+            silentAdvanceTimerRef.current = null;
+          }
+          manimVideoRef.current?.pauseAsync().catch(() => {});
+          setIsPlaying(false);
+        } else {
+          markPresentationStarted();
+          let posMs = 0;
+          try {
+            const st = await manimVideoRef.current?.getStatusAsync();
+            if (st?.isLoaded) posMs = st.positionMillis || 0;
+          } catch {}
+          const totalMs = videoSlideTotalMs(slide);
+          if (posMs >= totalMs - 100) {
+            manimVideoRef.current?.setPositionAsync(0).catch(() => {});
+            posMs = 0;
+          }
+          manimVideoRef.current?.playAsync().catch(() => {});
+          setIsPlaying(true);
+          armSilentAdvanceTimer(currentSlideIndex, totalMs - posMs);
+        }
+        return;
+      }
+    }
+
     if (soundRef.current) {
       const status = await soundRef.current.getStatusAsync();
       if (status.isLoaded) {
@@ -1863,6 +2001,7 @@ export default function TopicDetailsScreen() {
           // or when near the end of the track
           if (audioDuration === 0 || status.positionMillis >= (status.durationMillis || 1) - 100) {
             await soundRef.current.setPositionAsync(0);
+            manimVideoRef.current?.setPositionAsync(0).catch(() => {});
           }
           await soundRef.current.playAsync();
           setIsPlaying(true);
@@ -1939,6 +2078,7 @@ export default function TopicDetailsScreen() {
     setAudioDuration(0);
     preloadedAudioRef.current = [];
     preloadedImagesRef.current = {};
+      preloadedVideosRef.current = {};
   };
 
   // Load a slide's pre-fetched audio WITHOUT playing it, so the player opens in a
@@ -2096,6 +2236,13 @@ export default function TopicDetailsScreen() {
     if (soundRef.current && isPlaying) {
       soundRef.current.pauseAsync().catch(() => {});
     }
+    // Freeze the Manim video too so it can't drift ahead during the drag, and
+    // hold the silent-advance timer so a video-only slide can't flip mid-drag.
+    manimVideoRef.current?.pauseAsync().catch(() => {});
+    if (silentAdvanceTimerRef.current) {
+      clearTimeout(silentAdvanceTimerRef.current);
+      silentAdvanceTimerRef.current = null;
+    }
   };
 
   // Live-update the visible position label/fill while the finger moves. Safe
@@ -2126,11 +2273,37 @@ export default function TopicDetailsScreen() {
           const pos = Math.floor(clamped * dur);
           markPresentationStarted();
           await soundRef.current.setPositionAsync(pos);
+          // Keep the Manim video locked to the same timeline: seek it to the
+          // same millisecond as the narration audio.
+          manimVideoRef.current?.setPositionAsync(pos).catch(() => {});
           setAudioProgress(pos);
           if (shouldResume) {
             await soundRef.current.playAsync();
+            manimVideoRef.current?.playAsync().catch(() => {});
             setIsPlaying(true);
             setIsSpeaking(true);
+          } else {
+            setIsPlaying(false);
+          }
+        }
+      } else {
+        // Video-only slide (no narration sound loaded): seek the Manim video
+        // itself and re-arm the silent-advance timer for the remaining time.
+        const slide = aiResponseRef.current?.presentationSlides?.[currentSlideIndex];
+        if (slide?.manimVideoUrl) {
+          let dur = videoSlideTotalMs(slide);
+          try {
+            const st = await manimVideoRef.current?.getStatusAsync();
+            if (st?.isLoaded && st.durationMillis) dur = st.durationMillis;
+          } catch {}
+          const pos = Math.floor(clamped * dur);
+          markPresentationStarted();
+          await manimVideoRef.current?.setPositionAsync(pos).catch(() => {});
+          setAudioProgress(pos);
+          if (shouldResume) {
+            manimVideoRef.current?.playAsync().catch(() => {});
+            setIsPlaying(true);
+            armSilentAdvanceTimer(currentSlideIndex, videoSlideTotalMs(slide) - pos);
           } else {
             setIsPlaying(false);
           }
@@ -2739,6 +2912,7 @@ export default function TopicDetailsScreen() {
       setTotalPresentationDuration(0);
       preloadedAudioRef.current = [];
       preloadedImagesRef.current = {};
+      preloadedVideosRef.current = {};
       clearAiExpiryTimer();
       stopPresentationPlayback();
       setAiResponse(null);
@@ -3656,9 +3830,13 @@ export default function TopicDetailsScreen() {
                 )}
               </View>
               
-              {/* Center column - Image (50%) */}
+              {/* Center column - Manim video or Image (50%) */}
               <View style={styles.landscapeCenterColumn}>
-                {slideImages.length > 0 ? (
+                {currentSlide.manimVideoUrl && !isPresentationFullscreen ? (
+                  <View style={styles.landscapeImageWrapper}>
+                    {renderManimVideo(currentSlide.manimVideoUrl, styles.landscapeDiagramImageCenter)}
+                  </View>
+                ) : slideImages.length > 0 ? (
                   <View style={styles.landscapeImageWrapper}>
                     <ScrollView 
                       horizontal 
@@ -3837,7 +4015,11 @@ export default function TopicDetailsScreen() {
             </View>
 
             <View style={styles.aiPortraitStage}>
-              {pSlideImages.length > 0 ? (
+              {currentSlide.manimVideoUrl && !isPresentationFullscreen ? (
+                <View style={styles.aiPortraitStageImage}>
+                  {renderManimVideo(currentSlide.manimVideoUrl, styles.aiPortraitDiagramImg)}
+                </View>
+              ) : pSlideImages.length > 0 ? (
                 <TouchableOpacity
                   style={styles.aiPortraitStageImage}
                   onPress={() => setFullscreenImage(pSlideImages[0])}
@@ -8009,9 +8191,17 @@ export default function TopicDetailsScreen() {
                   </ScrollView>
                 </View>
                 
-                {/* Center column - Image/Content */}
+                {/* Center column - Manim video or Image/Content */}
                 <View style={styles.fullscreenLandscapeCenter}>
-                  {aiResponse.presentationSlides[currentSlideIndex].infographicUrl ? (
+                  {aiResponse.presentationSlides[currentSlideIndex].manimVideoUrl ? (
+                    <View style={styles.fullscreenLandscapeImageWrapper}>
+                      {renderManimVideo(aiResponse.presentationSlides[currentSlideIndex].manimVideoUrl!, {
+                        width: Math.max(windowWidth - 400 - 16, 200),
+                        height: Math.max(windowHeight - 40, 200),
+                        borderRadius: 12,
+                      })}
+                    </View>
+                  ) : aiResponse.presentationSlides[currentSlideIndex].infographicUrl ? (
                     <TouchableOpacity 
                       onPress={() => setFullscreenImage(aiResponse.presentationSlides[currentSlideIndex].infographicUrl)}
                       activeOpacity={0.9}
@@ -8130,7 +8320,11 @@ export default function TopicDetailsScreen() {
 
                       return (
                         <>
-                          {fsImages.length > 0 ? (
+                          {fsSlide.manimVideoUrl ? (
+                            <View style={styles.aiPortraitStageImage}>
+                              {renderManimVideo(fsSlide.manimVideoUrl, styles.aiPortraitDiagramImg)}
+                            </View>
+                          ) : fsImages.length > 0 ? (
                             <TouchableOpacity style={styles.aiPortraitStageImage} onPress={() => setFullscreenImage(fsImages[0])} activeOpacity={0.9}>
                               <Image
                                 source={{ uri: fsGetUri(fsImages[0]) }}
