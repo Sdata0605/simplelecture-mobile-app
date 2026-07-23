@@ -29,7 +29,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { Audio, Video, ResizeMode } from 'expo-av';
 import * as Speech from 'expo-speech';
-import * as FileSystem from 'expo-file-system';
+// SDK 54: downloadAsync/cacheDirectory from the root 'expo-file-system' import
+// THROW a deprecation error at runtime, silently breaking all AI slide media
+// downloads. The legacy entry point keeps the old behavior.
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import * as ImagePicker from 'expo-image-picker';
 import { Buffer } from 'buffer';

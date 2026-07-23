@@ -2157,6 +2157,45 @@ class SupabaseService {
       });
     }
 
+    // Overlay the TOP-LEVEL Manim video map onto slides. Upstream does NOT put
+    // manimVideoUrl on each slide — videos arrive as manimVideoUrls (or
+    // manim_video_urls) keyed by the raw slide index as a string:
+    //   {"1": {"url": "...manim_1.mp4", "duration_seconds": 14.08}, ...}
+    // This must run BEFORE the key-point filter (keys use raw upstream order).
+    const rawVideoMap = pick<Record<string, any>>(raw?.manim_video_urls, raw?.manimVideoUrls);
+    if (rawVideoMap && typeof rawVideoMap === 'object' && !Array.isArray(rawVideoMap)) {
+      Object.entries(rawVideoMap).forEach(([key, v]) => {
+        const idx = Number(key);
+        const target = Number.isInteger(idx) ? normalizedSlides[idx] : undefined;
+        const url = pick<string>(v?.url, v?.video_url, v?.videoUrl, typeof v === 'string' ? v : undefined);
+        // Contract-drift guard: keys are 0-based raw slide indices (verified
+        // against the live API). Log loudly if a key falls outside the slides.
+        if (!target && url) {
+          console.warn('[API] manimVideoUrls key', key, 'has no matching slide (slides:', normalizedSlides.length, ') — upstream indexing may have changed');
+        }
+        if (target && url && !target.manimVideoUrl) {
+          target.manimVideoUrl = url;
+          if (target.manimDurationSeconds == null) {
+            target.manimDurationSeconds = pick<number>(v?.duration_seconds, v?.durationSeconds);
+          }
+        }
+      });
+    }
+
+    // Same for the top-level image map — backfill infographicUrl when a slide
+    // arrived without its own.
+    const rawImageMap = pick<Record<string, any>>(raw?.image_urls, raw?.imageUrls);
+    if (rawImageMap && typeof rawImageMap === 'object' && !Array.isArray(rawImageMap)) {
+      Object.entries(rawImageMap).forEach(([key, v]) => {
+        const idx = Number(key);
+        const target = Number.isInteger(idx) ? normalizedSlides[idx] : undefined;
+        const url = pick<string>(v?.url, typeof v === 'string' ? v : undefined);
+        if (target && url && !target.infographicUrl) {
+          target.infographicUrl = url;
+        }
+      });
+    }
+
     // Keep slides with at least one key point; if that filters everything out,
     // fall back to the raw-normalized slides so the user still sees content.
     const withKeyPoints = normalizedSlides.filter((s) => s.keyPoints.length > 0);
