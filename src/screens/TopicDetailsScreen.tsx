@@ -55,6 +55,7 @@ import HeaderMenuButton from '../components/HeaderMenuButton';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { supabase, Topic, TopicVideo, CounselorAvatar, PresentationSlide, AITeachingAssistantResponse, PregenSuggestion, PreviousYearPaper, PreviousYearQuestion, TestConfig, DPPQuestion, Assignment, AssignmentQuestion, AssignmentSubmission, QuestionItem, SubjectiveGradeResult } from '../services/supabase';
 import MathText, { containsLatex } from '../components/MathText';
+import RichTipText from '../components/RichTipText';
 import { stripEmbeddedOptions } from '../utils/questionText';
 import PYQTab from '../components/PYQTab';
 import DoubtsTab from '../components/DoubtsTab';
@@ -4120,6 +4121,26 @@ export default function TopicDetailsScreen() {
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
+              </View>
+            )}
+
+            {!!aiResponse.examTip?.trim() && (
+              <View style={styles.aiPortraitCard} data-testid="card-exam-tip">
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                  <Ionicons name="school" size={14} color={colors.primary} />
+                  <Text style={styles.aiPortraitCardTitle}>EXAM TIP</Text>
+                </View>
+                <RichTipText content={aiResponse.examTip} color={colors.gray700} fontSize={14} lineHeight={21} />
+              </View>
+            )}
+
+            {!!aiResponse.realLifeExample?.trim() && (
+              <View style={styles.aiPortraitCard} data-testid="card-real-life-example">
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                  <Ionicons name="earth" size={14} color={colors.primary} />
+                  <Text style={styles.aiPortraitCardTitle}>REAL-LIFE EXAMPLE</Text>
+                </View>
+                <RichTipText content={aiResponse.realLifeExample} color={colors.gray700} fontSize={14} lineHeight={21} />
               </View>
             )}
 

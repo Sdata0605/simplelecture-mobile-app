@@ -13,6 +13,10 @@ export interface AITextAnswerData {
   slidePreview: DoubtSlidePreview | null;
   suggestions: string[];
   isDocGrounded: boolean;
+  /** Optional exam tip: new name `exam_tip`, older cached name `quick_tip`. */
+  examTip?: string;
+  /** Optional real-life example: new name `real_life_example`, older cached name `example`. */
+  realLifeExample?: string;
 }
 
 export type AITextAnswerResult =
@@ -36,6 +40,14 @@ const USER_KEY = 'user_data';
 // Minimal base64 decoder (no atob dependency — not guaranteed in the RN/Hermes
 // runtime). Only used to read the JWT payload, which is ASCII JSON.
 const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+/** First argument that is a non-empty string (trimmed check, original kept). */
+function firstNonEmptyString(...vals: any[]): string | undefined {
+  for (const v of vals) {
+    if (typeof v === 'string' && v.trim()) return v;
+  }
+  return undefined;
+}
+
 function decodeBase64(input: string): string {
   let output = '';
   let buffer = 0;
@@ -301,6 +313,10 @@ export interface AITeachingAssistantResponse {
   subjectName?: string;
   detected_topic?: string;
   related_concepts?: string[];
+  // Optional enrichment fields. Upstream may send the new names
+  // (exam_tip / real_life_example) or older cached names (quick_tip / example).
+  examTip?: string;
+  realLifeExample?: string;
   // Off-subject guard: when the server classifies the question as belonging to
   // a different subject it short-circuits and returns blocked=true with a
   // redirect message instead of a presentation.
@@ -2229,6 +2245,11 @@ class SupabaseService {
       slideAudioUrls,
       subjectName: pick<string>(raw?.subject_name, raw?.subjectName),
       detected_topic: pick<string>(raw?.detected_topic, raw?.detectedTopic),
+      // New names first (exam_tip / real_life_example), then the older cached
+      // names (quick_tip / example); snake_case and camelCase both accepted.
+      // Non-empty selection: an empty new-name value must not block fallback.
+      examTip: firstNonEmptyString(raw?.exam_tip, raw?.examTip, raw?.quick_tip, raw?.quickTip),
+      realLifeExample: firstNonEmptyString(raw?.real_life_example, raw?.realLifeExample, raw?.example),
       related_concepts: pick<string[]>(raw?.related_concepts, raw?.relatedConcepts),
       blocked: false,
     };
@@ -2546,6 +2567,10 @@ class SupabaseService {
                 .slice(0, 6)
             : [],
           isDocGrounded: !!data.is_doc_grounded,
+          // New names first, then the older cached names. Only non-empty
+          // strings survive so the UI can gate cards on presence alone.
+          examTip: firstNonEmptyString(data.exam_tip, data.quick_tip),
+          realLifeExample: firstNonEmptyString(data.real_life_example, data.example),
         },
       };
     } catch (error: any) {

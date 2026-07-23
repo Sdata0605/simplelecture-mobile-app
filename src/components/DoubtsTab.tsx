@@ -26,6 +26,7 @@ import {
 } from '../utils/latexFormat';
 import DoubtThreadDrawer from './doubts/DoubtThreadDrawer';
 import SlidePreviewPlayer from './doubts/SlidePreviewPlayer';
+import RichTipText from './RichTipText';
 import {
   DoubtThread,
   DoubtStoredMessage,
@@ -258,6 +259,20 @@ const KeyPointsList = ({ items }: { items: string[] }) => (
   </View>
 );
 
+/**
+ * Small titled card for the optional exam-tip / real-life-example fields.
+ * Math-aware: the content may contain bold text or LaTeX formulas.
+ */
+const InfoCard = ({ icon, title, content }: { icon: any; title: string; content: string }) => (
+  <View style={kpStyles.container}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+      <Ionicons name={icon} size={13} color={colors.primary} />
+      <Text style={kpStyles.heading}>{title}</Text>
+    </View>
+    <RichTipText content={convertMathpixToStandard(content)} />
+  </View>
+);
+
 /** Small "Doc title · Section" pills. Hidden when empty (caller checks). */
 const SourceChips = ({ sources }: { sources: DoubtSource[] }) => (
   <View style={srcStyles.container}>
@@ -466,6 +481,8 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
             keyPoints: result.data.keyPoints.length > 0 ? result.data.keyPoints : undefined,
             sources: result.data.sources.length > 0 ? result.data.sources : undefined,
             slidePreview: result.data.slidePreview ?? undefined,
+            examTip: result.data.examTip,
+            realLifeExample: result.data.realLifeExample,
           };
         } else {
           // Not in the course corpus — a normal assistant reply, not an error.
@@ -631,6 +648,12 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
                         msg.slidePreview &&
                         index === messages.length - 1 &&
                         !isLoading && <SlidePreviewPlayer preview={msg.slidePreview} />}
+                      {!msg.noContent && !!msg.examTip?.trim() && (
+                        <InfoCard icon="school" title="Exam tip" content={msg.examTip} />
+                      )}
+                      {!msg.noContent && !!msg.realLifeExample?.trim() && (
+                        <InfoCard icon="earth" title="Real-life example" content={msg.realLifeExample} />
+                      )}
                     </View>
                   )}
                 </View>

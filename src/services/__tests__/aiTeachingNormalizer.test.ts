@@ -95,6 +95,44 @@ describe('normalizeAITeachingResponse — top-level media maps', () => {
     expect(out.presentationSlides[0].manimDurationSeconds).toBe(3);
   });
 
+  it('reads exam tip / real-life example from the NEW field names', () => {
+    const out = normalize({
+      presentationSlides: [slide(0)],
+      exam_tip: 'Focus on the 1757 timeline.',
+      real_life_example: 'Like a **modern** boardroom coup: $x$',
+    });
+    expect(out.examTip).toBe('Focus on the 1757 timeline.');
+    expect(out.realLifeExample).toBe('Like a **modern** boardroom coup: $x$');
+  });
+
+  it('falls back to the OLD cached names (quick_tip / example)', () => {
+    const out = normalize({
+      presentationSlides: [slide(0)],
+      quick_tip: 'Old tip',
+      example: 'Old example',
+    });
+    expect(out.examTip).toBe('Old tip');
+    expect(out.realLifeExample).toBe('Old example');
+  });
+
+  it('prefers new names over old ones when both are present', () => {
+    const out = normalize({
+      presentationSlides: [slide(0)],
+      exam_tip: 'New tip',
+      quick_tip: 'Old tip',
+      real_life_example: 'New example',
+      example: 'Old example',
+    });
+    expect(out.examTip).toBe('New tip');
+    expect(out.realLifeExample).toBe('New example');
+  });
+
+  it('leaves the fields undefined when absent (current live responses)', () => {
+    const out = normalize({ presentationSlides: [slide(0)] });
+    expect(out.examTip).toBeUndefined();
+    expect(out.realLifeExample).toBeUndefined();
+  });
+
   it('tolerates missing/empty/array-shaped maps without breaking slides', () => {
     for (const weird of [undefined, null, {}, [], 'nope']) {
       const out = normalize({ presentationSlides: [slide(0)], manimVideoUrls: weird, imageUrls: weird });

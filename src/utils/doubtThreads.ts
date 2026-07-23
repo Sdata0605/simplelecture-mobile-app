@@ -52,6 +52,10 @@ export interface DoubtStoredMessage {
   sources?: DoubtSource[];
   /** Mini slide presentation; only the newest assistant message keeps it. */
   slidePreview?: DoubtSlidePreview;
+  /** Optional exam tip card shown after the slide preview. */
+  examTip?: string;
+  /** Optional real-life example card shown after the exam tip. */
+  realLifeExample?: string;
   /** True when the server said the question isn't in the course corpus. */
   noContent?: boolean;
 }
@@ -208,6 +212,10 @@ function sanitizeMessage(raw: any): DoubtStoredMessage | null {
   }
   const preview = sanitizeSlidePreview(raw.slidePreview);
   if (preview) msg.slidePreview = preview;
+  if (typeof raw.examTip === 'string' && raw.examTip.trim()) msg.examTip = raw.examTip;
+  if (typeof raw.realLifeExample === 'string' && raw.realLifeExample.trim()) {
+    msg.realLifeExample = raw.realLifeExample;
+  }
   if (raw.noContent === true) msg.noContent = true;
   return msg;
 }
