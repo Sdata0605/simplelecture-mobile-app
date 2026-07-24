@@ -16,6 +16,18 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Reanimated, { useSharedValue, useAnimatedStyle } from 'react-native-reanimated';
+
+// react-native-keyboard-controller needs its native module (present in EAS
+// builds, absent in Expo Go — where merely importing it throws). Load lazily
+// and fall back to the legacy listener-based behavior when unavailable.
+let KeyboardControllerLib: typeof import('react-native-keyboard-controller') | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  KeyboardControllerLib = require('react-native-keyboard-controller');
+} catch {
+  KeyboardControllerLib = null;
+}
 import { supabase as supabaseService } from '../services/supabase';
 import MathText, { buildKatexHtml } from './MathText';
 import {
@@ -306,13 +318,74 @@ const TypingIndicator = () => {
 
 const INPUT_BAR_HEIGHT = 56;
 
-export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeSend }: DoubtsTabProps) {
+/**
+ * Wrapper: the keyboard-controller provider is mounted locally (not app-wide)
+ * so the rest of the app keeps its existing native keyboard behavior. While
+ * this tab is mounted, the library takes over keyboard handling and reports
+ * the real keyboard height on every device — including Android phones where
+ * the native "resize" mode is ignored (edge-to-edge / OEM skins), which used
+ * to leave the input hidden behind the keyboard.
+ */
+export default function DoubtsTab(props: DoubtsTabProps) {
+  if (!KeyboardControllerLib) {
+    // Expo Go / native module missing: legacy behavior.
+    return <DoubtsTabInner {...props} keyboardControlled={false} />;
+  }
+  const { KeyboardProvider } = KeyboardControllerLib;
+  return (
+    <KeyboardProvider statusBarTranslucent navigationBarTranslucent>
+      <DoubtsTabInner {...props} keyboardControlled />
+    </KeyboardProvider>
+  );
+}
+
+/**
+ * Tracks the keyboard's position frame-by-frame (height starts at 0 and grows
+ * as the keyboard slides up) so the input bar can stay glued to its top edge.
+ * No-op when the native module is unavailable (Expo Go); the caller then
+ * drives the offset from the legacy Keyboard listeners instead.
+ * `KeyboardControllerLib` is fixed at module load, so the branch is stable
+ * across renders (no conditional-hook violation).
+ */
+function useKeyboardDrivenOffset(enabled: boolean) {
+  const offset = useSharedValue(0);
+  if (enabled && KeyboardControllerLib) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    KeyboardControllerLib.useKeyboardHandler(
+      {
+        onMove: (e) => {
+          'worklet';
+          offset.value = Math.max(e.height, 0);
+        },
+        onEnd: (e) => {
+          'worklet';
+          offset.value = Math.max(e.height, 0);
+        },
+      },
+      []
+    );
+  }
+  return offset;
+}
+
+function DoubtsTabInner({
+  subjectId,
+  subjectName,
+  studentId,
+  onBeforeSend,
+  keyboardControlled,
+}: DoubtsTabProps & { keyboardControlled: boolean }) {
   const [threads, setThreads] = useState<DoubtThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  // Real-time keyboard offset (shared value) driving the input bar position.
+  const keyboardOffset = useKeyboardDrivenOffset(keyboardControlled);
+  const inputBarAnimatedStyle = useAnimatedStyle(() => ({
+    bottom: keyboardOffset.value,
+  }));
   const scrollViewRef = useRef<ScrollView>(null);
   const insets = useSafeAreaInsets();
   // Guards against a slow load for a previous subject clobbering the current one.
@@ -380,9 +453,17 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
 
     const showSub = Keyboard.addListener(showEvent, (e) => {
       setKeyboardHeight(e.endCoordinates.height);
+      if (!keyboardControlled) {
+        // Legacy fallback (Expo Go): lift manually on iOS only; Android
+        // relies on the native window resize.
+        keyboardOffset.value = Platform.OS === 'ios' ? e.endCoordinates.height : 0;
+      }
     });
     const hideSub = Keyboard.addListener(hideEvent, () => {
       setKeyboardHeight(0);
+      if (!keyboardControlled) {
+        keyboardOffset.value = 0;
+      }
     });
 
     return () => {
@@ -549,9 +630,13 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
   }
 
   const isKeyboardOpen = keyboardHeight > 0;
-  const bottomOffset = isKeyboardOpen && Platform.OS === 'ios' ? keyboardHeight : 0;
   const inputBottomPadding = isKeyboardOpen ? 4 : Math.max(insets.bottom, 8);
-  const scrollPaddingBottom = INPUT_BAR_HEIGHT + inputBottomPadding + 8;
+  // With the keyboard-controller provider active the window no longer resizes
+  // on any platform, so when the keyboard is open the scroll content must also
+  // clear the keyboard itself, not just the (lifted) input bar. In the legacy
+  // fallback the window still resizes natively, so no extra padding.
+  const scrollPaddingBottom =
+    INPUT_BAR_HEIGHT + inputBottomPadding + 8 + (keyboardControlled ? keyboardHeight : 0);
 
   return (
     <View style={styles.container}>
@@ -687,7 +772,7 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
         </ScrollView>
       )}
 
-      <View style={[styles.inputContainer, { bottom: bottomOffset, paddingBottom: inputBottomPadding }]}>
+      <Reanimated.View style={[styles.inputContainer, inputBarAnimatedStyle, { paddingBottom: inputBottomPadding }]}>
         <View style={styles.inputRow}>
           <TextInput
             style={styles.textInput}
@@ -714,7 +799,7 @@ export default function DoubtsTab({ subjectId, subjectName, studentId, onBeforeS
             )}
           </TouchableOpacity>
         </View>
-      </View>
+      </Reanimated.View>
 
       <DoubtThreadDrawer
         visible={drawerVisible}
