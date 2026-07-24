@@ -16,18 +16,12 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Reanimated, { useSharedValue, useAnimatedStyle } from 'react-native-reanimated';
-
-// react-native-keyboard-controller needs its native module (present in EAS
-// builds, absent in Expo Go — where merely importing it throws). Load lazily
-// and fall back to the legacy listener-based behavior when unavailable.
-let KeyboardControllerLib: typeof import('react-native-keyboard-controller') | null = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  KeyboardControllerLib = require('react-native-keyboard-controller');
-} catch {
-  KeyboardControllerLib = null;
-}
+import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
+import {
+  KeyboardScope,
+  isKeyboardControlled,
+  useKeyboardDrivenOffset,
+} from './keyboard/keyboardStick';
 import { supabase as supabaseService } from '../services/supabase';
 import MathText, { buildKatexHtml } from './MathText';
 import {
@@ -327,45 +321,11 @@ const INPUT_BAR_HEIGHT = 56;
  * to leave the input hidden behind the keyboard.
  */
 export default function DoubtsTab(props: DoubtsTabProps) {
-  if (!KeyboardControllerLib) {
-    // Expo Go / native module missing: legacy behavior.
-    return <DoubtsTabInner {...props} keyboardControlled={false} />;
-  }
-  const { KeyboardProvider } = KeyboardControllerLib;
   return (
-    <KeyboardProvider statusBarTranslucent navigationBarTranslucent>
-      <DoubtsTabInner {...props} keyboardControlled />
-    </KeyboardProvider>
+    <KeyboardScope>
+      <DoubtsTabInner {...props} keyboardControlled={isKeyboardControlled} />
+    </KeyboardScope>
   );
-}
-
-/**
- * Tracks the keyboard's position frame-by-frame (height starts at 0 and grows
- * as the keyboard slides up) so the input bar can stay glued to its top edge.
- * No-op when the native module is unavailable (Expo Go); the caller then
- * drives the offset from the legacy Keyboard listeners instead.
- * `KeyboardControllerLib` is fixed at module load, so the branch is stable
- * across renders (no conditional-hook violation).
- */
-function useKeyboardDrivenOffset(enabled: boolean) {
-  const offset = useSharedValue(0);
-  if (enabled && KeyboardControllerLib) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    KeyboardControllerLib.useKeyboardHandler(
-      {
-        onMove: (e) => {
-          'worklet';
-          offset.value = Math.max(e.height, 0);
-        },
-        onEnd: (e) => {
-          'worklet';
-          offset.value = Math.max(e.height, 0);
-        },
-      },
-      []
-    );
-  }
-  return offset;
 }
 
 function DoubtsTabInner({

@@ -10,7 +10,6 @@ import {
   SafeAreaView,
   Linking,
   TextInput,
-  KeyboardAvoidingView,
   Platform,
   Keyboard,
   Alert,
@@ -27,6 +26,7 @@ import { useCourseFreeAccess, useCourseFreePreviewLimits } from '../hooks/useCou
 import { getQuotaCount, incrementQuota } from '../utils/previewQuota';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import DoubtsTab from '../components/DoubtsTab';
+import { KeyboardShiftView, isKeyboardControlled } from '../components/keyboard/keyboardStick';
 import PYQTab from '../components/PYQTab';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -545,7 +545,10 @@ function PreviewAIChatTab({ topicId, subjectId, chapterId, courseId, topicTitle,
     }
   }, [input, loading, messages, topicId, chapterId, subjectId, courseId, topicTitle, presentationJson, aiLimit, onQuotaExceeded]);
 
-  const inputBottomPad = keyboardH > 0 && Platform.OS === 'ios' ? keyboardH : 8;
+  // When keyboard-controller drives the container's padding (EAS builds),
+  // adding keyboardH here again would double-lift the input on iOS.
+  const inputBottomPad =
+    !isKeyboardControlled && keyboardH > 0 && Platform.OS === 'ios' ? keyboardH : 8;
 
   if (!quotaLoaded) return <TabLoadingCard />;
 
@@ -554,11 +557,7 @@ function PreviewAIChatTab({ topicId, subjectId, chapterId, courseId, topicTitle,
     : null;
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={120}
-    >
+    <KeyboardShiftView style={{ flex: 1 }} iosKeyboardVerticalOffset={120}>
       {/* Quota chip */}
       {remainingLabel && (
         <View style={aiChatStyles.quotaChip}>
@@ -650,7 +649,7 @@ function PreviewAIChatTab({ topicId, subjectId, chapterId, courseId, topicTitle,
           }
         </TouchableOpacity>
       </View>
-    </KeyboardAvoidingView>
+    </KeyboardShiftView>
   );
 }
 

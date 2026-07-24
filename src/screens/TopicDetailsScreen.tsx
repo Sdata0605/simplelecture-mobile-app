@@ -12,7 +12,6 @@ import {
   Dimensions,
   Pressable,
   ActivityIndicator,
-  KeyboardAvoidingView,
   Platform,
   Keyboard,
   Alert,
@@ -56,6 +55,7 @@ import { RootStackParamList } from '../navigation/AppNavigator';
 import { supabase, Topic, TopicVideo, CounselorAvatar, PresentationSlide, AITeachingAssistantResponse, PregenSuggestion, PreviousYearPaper, PreviousYearQuestion, TestConfig, DPPQuestion, Assignment, AssignmentQuestion, AssignmentSubmission, QuestionItem, SubjectiveGradeResult } from '../services/supabase';
 import MathText, { containsLatex } from '../components/MathText';
 import RichTipText from '../components/RichTipText';
+import { KeyboardShiftView } from '../components/keyboard/keyboardStick';
 import { stripEmbeddedOptions } from '../utils/questionText';
 import PYQTab from '../components/PYQTab';
 import DoubtsTab from '../components/DoubtsTab';
@@ -4199,16 +4199,17 @@ export default function TopicDetailsScreen() {
     ];
     
     // This tab is rendered in a bounded flex:1 View (NOT inside the outer
-    // ScrollView in renderContent) so this KeyboardAvoidingView gets a real
-    // bounded height. A KAV nested in a parent ScrollView gets unbounded height,
-    // making flex/onLayout meaningless and compounding the input's offset on each
-    // keyboard show/hide — the "input drifts downward on repeated taps" bug.
-    // On Android we rely on native window resize (behavior undefined); iOS uses padding.
+    // ScrollView in renderContent) so this keyboard container gets a real
+    // bounded height. A keyboard-avoiding container nested in a parent
+    // ScrollView gets unbounded height, making flex/onLayout meaningless and
+    // compounding the input's offset on each keyboard show/hide — the "input
+    // drifts downward on repeated taps" bug.
+    // KeyboardShiftView tracks the real keyboard height on every device (EAS
+    // builds); in Expo Go it falls back to the old KAV behavior.
     return (
-      <KeyboardAvoidingView 
+      <KeyboardShiftView
         style={[styles.tabContent, { flex: 1 }]}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 120 : 0}
+        iosKeyboardVerticalOffset={120}
       >
         <ScrollView 
           style={styles.aiChatEnhanced}
@@ -4434,7 +4435,7 @@ export default function TopicDetailsScreen() {
             </LinearGradient>
           </TouchableOpacity>
         </View>
-      </KeyboardAvoidingView>
+      </KeyboardShiftView>
     );
   };
 
