@@ -26,6 +26,7 @@ import { useCourseFreeAccess, useCourseFreePreviewLimits } from '../hooks/useCou
 import { getQuotaCount, incrementQuota } from '../utils/previewQuota';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import DoubtsTab from '../components/DoubtsTab';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardShiftView, isKeyboardControlled } from '../components/keyboard/keyboardStick';
 import PYQTab from '../components/PYQTab';
 
@@ -457,6 +458,7 @@ function PreviewAIChatTab({ topicId, subjectId, chapterId, courseId, topicTitle,
   const [asksUsed, setAsksUsed] = useState(0);
   const [quotaLoaded, setQuotaLoaded] = useState(false);
   const [keyboardH, setKeyboardH] = useState(0);
+  const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
 
   // Load current quota count on mount
@@ -547,8 +549,13 @@ function PreviewAIChatTab({ topicId, subjectId, chapterId, courseId, topicTitle,
 
   // When keyboard-controller drives the container's padding (EAS builds),
   // adding keyboardH here again would double-lift the input on iOS.
+  // Keyboard closed: clear the gesture bar / home indicator via safe-area.
   const inputBottomPad =
-    !isKeyboardControlled && keyboardH > 0 && Platform.OS === 'ios' ? keyboardH : 8;
+    keyboardH > 0
+      ? !isKeyboardControlled && Platform.OS === 'ios'
+        ? keyboardH
+        : 8
+      : Math.max(insets.bottom, 8);
 
   if (!quotaLoaded) return <TabLoadingCard />;
 

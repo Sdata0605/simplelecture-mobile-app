@@ -504,6 +504,16 @@ export default function TopicDetailsScreen() {
   const route = useRoute<RouteProp<RootStackParamList, 'TopicDetails'>>();
   const { topicId, subjectId, subjectName, openAITab, openTab, chapterNumber, topicNumber, topicTitle, chapterId: routeChapterId, isPreview, courseId: previewCourseId, courseName: previewCourseName, previewAiLimit = 3, previewDoubtsLimit = 3 } = route.params || {};
   const insets = useSafeAreaInsets();
+  // Keyboard open/closed — drives the AI input bar's bottom padding: safe-area
+  // inset when closed (clear the gesture bar), compact when open.
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const s = Keyboard.addListener(showEvent, () => setIsKeyboardVisible(true));
+    const h = Keyboard.addListener(hideEvent, () => setIsKeyboardVisible(false));
+    return () => { s.remove(); h.remove(); };
+  }, []);
   const { user } = useAuth();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const isActualLandscape = windowWidth > windowHeight;
@@ -4399,7 +4409,12 @@ export default function TopicDetailsScreen() {
           </Animated.View>
         )}
 
-        <View style={styles.aiInputContainerEnhanced}>
+        <View
+          style={[
+            styles.aiInputContainerEnhanced,
+            { paddingBottom: isKeyboardVisible ? spacing.sm : Math.max(insets.bottom, spacing.md) },
+          ]}
+        >
           <View style={styles.aiInputWrapper}>
             <Ionicons name="chatbubble-ellipses-outline" size={20} color={colors.textMuted} style={styles.aiInputIcon} />
             <TextInput
