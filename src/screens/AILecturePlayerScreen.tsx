@@ -32,6 +32,7 @@ import { usePrefetchVideos } from '../hooks/usePrefetchVideos';
 import { useVideoCompletionTracker } from '../hooks/useVideoCompletionTracker';
 import { getVideoUri, getVideoUriAsync, downloadVideo, downloadVideoBatch, isVideoCached, isVideoCachedAsync, registerCachedUri, clearCorruptCache } from '../services/videoCacheService';
 import type { VideoDownloadResult } from '../services/videoCacheService';
+import KeepScreenAwake from '../components/KeepScreenAwake';
 
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -3083,6 +3084,7 @@ const AILecturePlayerScreen = forwardRef<AILecturePlayerHandle, AILecturePlayerP
 
   return (
     <SafeAreaView style={[styles.container, isFullscreen ? styles.fullscreenContainer : { backgroundColor: '#ffffff' }]} edges={['bottom']}>
+      {isPlaying && <KeepScreenAwake />}
       <StatusBar hidden={isFullscreen} />
       
       {!isFullscreen && (

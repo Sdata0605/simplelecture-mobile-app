@@ -56,6 +56,7 @@ import { supabase, Topic, TopicVideo, CounselorAvatar, PresentationSlide, AITeac
 import MathText, { containsLatex } from '../components/MathText';
 import RichTipText from '../components/RichTipText';
 import { KeyboardShiftView } from '../components/keyboard/keyboardStick';
+import KeepScreenAwake from '../components/KeepScreenAwake';
 import { stripEmbeddedOptions } from '../utils/questionText';
 import PYQTab from '../components/PYQTab';
 import DoubtsTab from '../components/DoubtsTab';
@@ -8011,6 +8012,7 @@ export default function TopicDetailsScreen() {
 
   return (
     <View style={styles.container}>
+      {isPlaying && <KeepScreenAwake />}
       <LinearGradient
         colors={[colors.primary, '#4ADE80']}
         start={{ x: 0, y: 0 }}

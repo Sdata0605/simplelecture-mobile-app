@@ -23,6 +23,7 @@ import V4SectionScene from '../components/v4/V4SectionScene';
 import { V4ControlsTop, V4ControlsBottom } from '../components/v4/V4Controls';
 import { buildWordTimings } from '../hooks/useV4Karaoke';
 import { useVideoCompletionTracker } from '../hooks/useVideoCompletionTracker';
+import KeepScreenAwake from '../components/KeepScreenAwake';
 
 type RouteProps = RouteProp<RootStackParamList, 'V4Player'>;
 type NavProps = NativeStackNavigationProp<RootStackParamList>;
@@ -604,6 +605,7 @@ export default function V4PlayerScreen() {
   if (isFullscreen) {
     return (
       <View style={styles.screenFS}>
+        {isPlaying && <KeepScreenAwake />}
         <StatusBar barStyle="light-content" backgroundColor={C.bg} hidden />
         <TouchableOpacity style={StyleSheet.absoluteFill} onPress={handleStageTap} activeOpacity={1}>
           {/* Merged teaching video — single pre-composited file per section */}
@@ -719,6 +721,7 @@ export default function V4PlayerScreen() {
 
   return (
     <View style={styles.screen}>
+      {isPlaying && <KeepScreenAwake />}
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
       <V4ControlsTop
