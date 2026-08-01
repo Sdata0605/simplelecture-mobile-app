@@ -26,7 +26,13 @@
  * This hook owns ONLY data/autosave — no UI.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   fetchAggregateChapterNote,
@@ -203,9 +209,15 @@ export function useStudentNoteEditor(
   const saveNow = useCallback(
     async (content: string): Promise<void> => {
       if (!userId || !subjectId || !chapterId) return;
+      const requestedContextKey = contextKey;
       // Persist the local copy first (still pending until the cloud confirms).
       persistLocal(content, true);
-      if (mountedRef.current) setStatus('saving');
+      if (
+        mountedRef.current &&
+        activeContextKeyRef.current === requestedContextKey
+      ) {
+        setStatus('saving');
+      }
       const res = isLecture
         ? await upsertNote({
             student_id: userId,
@@ -218,17 +230,25 @@ export function useStudentNoteEditor(
         : await saveAggregateChapterNote(userId, subjectId, chapterId, content);
 
       if (res.success) {
-        // Only clear pending if no NEWER keystroke arrived while we were saving.
-        if (latestTextRef.current === content) {
+        const isStillActive =
+          activeContextKeyRef.current === requestedContextKey;
+        // Once the editor has moved away, this completed request is the final
+        // save for its old context. Mark that old local copy as synced, but do
+        // not touch any state belonging to the newly selected note.
+        if (!isStillActive || latestTextRef.current === content) {
           persistLocal(content, false);
-          setPending(false);
-          if (mountedRef.current) setStatus('saved');
+          if (isStillActive) {
+            setPending(false);
+            if (mountedRef.current) setStatus('saved');
+          }
         }
         // If newer text exists, its own debounced save will follow.
       } else {
         // Local copy already written above (pending) — safe to retry later.
-        setPending(true);
-        if (mountedRef.current) setStatus('local');
+        if (activeContextKeyRef.current === requestedContextKey) {
+          setPending(true);
+          if (mountedRef.current) setStatus('local');
+        }
       }
     },
     [
@@ -238,6 +258,7 @@ export function useStudentNoteEditor(
       isLecture,
       overrideJobId,
       overrideTopicId,
+      contextKey,
       persistLocal,
       setPending,
     ],
@@ -248,6 +269,18 @@ export function useStudentNoteEditor(
     setTextState(value);
     latestTextRef.current = value;
   }, []);
+
+  // Reset synchronously when the full note identity changes. A layout effect
+  // runs before the native view is painted, so the new chapter title can never
+  // appear for a frame above the previous chapter's note.
+  useLayoutEffect(() => {
+    loadTokenRef.current++;
+    clearDebounce();
+    applyValue('');
+    setPending(false);
+    setStatus(ready ? 'loading' : 'idle');
+    setLoading(ready);
+  }, [contextKey, ready, clearDebounce, applyValue, setPending]);
 
   // --- Load: local-first, then cloud, reconciled --------------------------
   const reload = useCallback(async () => {
@@ -287,12 +320,19 @@ export function useStudentNoteEditor(
           // Retry the unsynced local draft; never clobber it with cloud.
           void saveNow(latestTextRef.current);
           setStatus('local');
+        } else if (!res.success) {
+          // A failed request is not proof that this context has no note.
+          // Preserve this context's own local copy when available.
+          if (!localMeta) applyValue('');
+          setPending(false);
+          setStatus(localMeta ? 'local' : 'error');
         } else if (row) {
           applyValue(row.content);
           persistLocal(row.content, false);
           setPending(false);
           setStatus('saved');
         } else {
+          applyValue('');
           setStatus(localMeta ? 'saved' : 'idle');
           setPending(false);
         }
@@ -311,6 +351,12 @@ export function useStudentNoteEditor(
           // Unsynced local draft wins; retry it and skip cloud overwrite.
           void saveNow(latestTextRef.current);
           setStatus('local');
+        } else if (!aggRes.success || !topicRes.success) {
+          // Avoid treating a partial/failed chapter fetch as an empty notebook.
+          // The local value here belongs to the newly selected context.
+          if (!localMeta) applyValue('');
+          setPending(false);
+          setStatus(localMeta ? 'local' : 'error');
         } else if (isAggregateStale(aggregate, topicNotes)) {
           const topicIds = Array.from(
             new Set(topicNotes.map((t) => t.topic_id).filter(Boolean)),
@@ -344,6 +390,7 @@ export function useStudentNoteEditor(
           setPending(false);
           setStatus('saved');
         } else {
+          applyValue('');
           setStatus(localMeta ? 'saved' : 'idle');
           setPending(false);
         }
@@ -351,6 +398,7 @@ export function useStudentNoteEditor(
     } catch {
       if (loadTokenRef.current !== token || !mountedRef.current) return;
       // Cloud load failed — local content (if any) stands.
+      if (!localMeta) applyValue('');
       setStatus(localMeta ? 'local' : 'error');
       setPending(localPending);
     } finally {
