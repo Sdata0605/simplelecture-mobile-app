@@ -279,7 +279,7 @@ export default function MyNotesChapterScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} testID="button-back">
           <Ionicons name="arrow-back" size={22} color={colors.text} />
