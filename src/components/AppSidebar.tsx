@@ -24,6 +24,7 @@ const MENU_ITEMS: MenuItem[] = [
   { icon: 'home', label: 'Home', route: 'Home' },
   { icon: 'grid', label: 'Dashboard', route: 'Dashboard' },
   { icon: 'document-text', label: 'My Courses', route: 'MyCourses' },
+  { icon: 'create', label: 'My Notes', route: 'MyNotes' },
   { icon: 'compass', label: 'Explore Courses', route: 'Courses' },
   { icon: 'videocam', label: 'Live Classes', route: 'LiveClasses' },
   { icon: 'trophy', label: 'My Rewards', route: 'MyRewards' },
@@ -34,7 +35,7 @@ const MENU_ITEMS: MenuItem[] = [
   { icon: 'help-circle', label: 'Support', route: 'Support' },
 ];
 
-const TAB_ROUTES = new Set(['Home', 'Dashboard', 'MyCourses', 'Reels', 'Profile', 'Courses']);
+const TAB_ROUTES = new Set(['Home', 'Dashboard', 'MyCourses', 'Reels', 'Profile', 'Courses', 'MyNotes']);
 
 function navigateTo(route: string) {
   const nav = navigationRef.current;

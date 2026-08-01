@@ -56,6 +56,9 @@ import StudyTimetableScreen from '../screens/StudyTimetableScreen';
 import MyTestsScreen from '../screens/MyTestsScreen';
 import MyTestTakeScreen from '../screens/MyTestTakeScreen';
 import MyTestResultScreen from '../screens/MyTestResultScreen';
+import MyNotesCoursesScreen from '../screens/MyNotesCoursesScreen';
+import MyNotesSubjectsScreen from '../screens/MyNotesSubjectsScreen';
+import MyNotesChapterScreen from '../screens/MyNotesChapterScreen';
 
 export type MainTabParamList = {
   MyCourses: undefined;
@@ -64,6 +67,7 @@ export type MainTabParamList = {
   Reels: undefined;
   Profile: undefined;
   Courses: { searchQuery?: string } | undefined;
+  MyNotes: undefined;
 };
 
 export type RootStackParamList = {
@@ -158,6 +162,8 @@ export type RootStackParamList = {
   MyTests: undefined;
   MyTestTake: { testId: string };
   MyTestResult: { testId: string };
+  MyNotesSubjects: { courseId: string; courseName?: string };
+  MyNotesChapter: { courseId: string; courseName?: string; subjectId: string; subjectName?: string; initialChapterId?: string };
 };
 
 export const navigationRef = createRef<NavigationContainerRef<RootStackParamList>>();
@@ -182,6 +188,7 @@ function TabNavigator({ route }: { route: RouteProp<RootStackParamList, 'MainTab
       <Tab.Screen name="Reels" component={ReelsScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
       <Tab.Screen name="Courses" component={CoursesScreen} />
+      <Tab.Screen name="MyNotes" component={MyNotesCoursesScreen} />
     </Tab.Navigator>
   );
 }
@@ -260,6 +267,8 @@ export default function AppNavigator() {
         <Stack.Screen name="MyTests" component={MyTestsScreen} />
         <Stack.Screen name="MyTestTake" component={MyTestTakeScreen} />
         <Stack.Screen name="MyTestResult" component={MyTestResultScreen} />
+        <Stack.Screen name="MyNotesSubjects" component={MyNotesSubjectsScreen} />
+        <Stack.Screen name="MyNotesChapter" component={MyNotesChapterScreen} />
       </Stack.Navigator>
       <AppSidebar />
       </SidebarProvider>

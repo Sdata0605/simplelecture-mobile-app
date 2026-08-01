@@ -86,31 +86,43 @@ export default function CustomTabBar({ state, navigation }: BottomTabBarProps) {
         style={[styles.gradient, { height: gradientHeight }]}
       >
         <View style={styles.tabsRow}>
-          <BarButton
-            isFocused={currentName === 'MyCourses'}
-            iconName={currentName === 'MyCourses' ? 'book' : 'book-outline'}
-            onPress={() => navigateTab('MyCourses')}
-          />
-          <BarButton
-            isFocused={currentName === 'Dashboard'}
-            iconName={currentName === 'Dashboard' ? 'grid' : 'grid-outline'}
-            onPress={() => navigateTab('Dashboard')}
-          />
+          <View style={styles.tabsSide}>
+            <BarButton
+              isFocused={currentName === 'MyCourses'}
+              iconName={currentName === 'MyCourses' ? 'book' : 'book-outline'}
+              size={22}
+              onPress={() => navigateTab('MyCourses')}
+            />
+            <BarButton
+              isFocused={currentName === 'Dashboard'}
+              iconName={currentName === 'Dashboard' ? 'grid' : 'grid-outline'}
+              size={22}
+              onPress={() => navigateTab('Dashboard')}
+            />
+          </View>
 
           <View style={styles.centerSpacer} />
 
-          <BarButton
-            isFocused={currentName === 'Courses'}
-            iconName={currentName === 'Courses' ? 'compass' : 'compass-outline'}
-            size={26}
-            onPress={() => navigateTab('Courses')}
-          />
-          <BarButton
-            isFocused={currentName === 'Reels'}
-            iconName={currentName === 'Reels' ? 'play-circle' : 'play-circle-outline'}
-            size={28}
-            onPress={() => navigateTab('Reels')}
-          />
+          <View style={styles.tabsSide}>
+            <BarButton
+              isFocused={currentName === 'MyNotes'}
+              iconName={currentName === 'MyNotes' ? 'create' : 'create-outline'}
+              size={22}
+              onPress={() => navigateTab('MyNotes')}
+            />
+            <BarButton
+              isFocused={currentName === 'Courses'}
+              iconName={currentName === 'Courses' ? 'compass' : 'compass-outline'}
+              size={22}
+              onPress={() => navigateTab('Courses')}
+            />
+            <BarButton
+              isFocused={currentName === 'Reels'}
+              iconName={currentName === 'Reels' ? 'play-circle' : 'play-circle-outline'}
+              size={24}
+              onPress={() => navigateTab('Reels')}
+            />
+          </View>
         </View>
       </LinearGradient>
 
@@ -156,6 +168,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     height: NAV_HEIGHT,
     paddingTop: 6,
+  },
+  tabsSide: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   centerSpacer: {
     width: FAB_SIZE + 16,

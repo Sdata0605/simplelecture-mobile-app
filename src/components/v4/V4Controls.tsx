@@ -46,9 +46,14 @@ interface V4ControlsTopProps {
   sections: V4Section[];
   currentIndex: number;
   onClose: () => void;
+  /** Optional Notes action — opens the lecture-note editor. When omitted the
+   *  Notes button is not rendered (e.g. preview mode with no note scope). */
+  onNotes?: () => void;
+  /** Highlights the Notes button while the editor panel is open. */
+  notesActive?: boolean;
 }
 
-export function V4ControlsTop({ title, sections, currentIndex, onClose }: V4ControlsTopProps) {
+export function V4ControlsTop({ title, sections, currentIndex, onClose, onNotes, notesActive }: V4ControlsTopProps) {
   const currentSection = sections[currentIndex];
   const secType = (currentSection?.section_type || 'content').toLowerCase();
   const badgeColor = BADGE_COLORS[secType] || C.teal;
@@ -66,6 +71,20 @@ export function V4ControlsTop({ title, sections, currentIndex, onClose }: V4Cont
       </View>
 
       <Text style={topStyles.title} numberOfLines={1}>{title}</Text>
+
+      {onNotes && (
+        <TouchableOpacity
+          onPress={onNotes}
+          style={[topStyles.notesBtn, notesActive && topStyles.notesBtnActive]}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={notesActive ? 'create' : 'create-outline'}
+            size={15}
+            color={notesActive ? C.gold : C.muted}
+          />
+        </TouchableOpacity>
+      )}
 
       <View style={topStyles.dots}>
         {sections.map((_, i) => {
@@ -132,6 +151,21 @@ const topStyles = StyleSheet.create({
     fontSize: 12,
     color: C.text,
     fontFamily: 'Sora_400Regular',
+  },
+  notesBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.09)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  notesBtnActive: {
+    backgroundColor: 'rgba(246,196,78,0.12)',
+    borderColor: 'rgba(246,196,78,0.5)',
   },
   dots: {
     flexDirection: 'row',

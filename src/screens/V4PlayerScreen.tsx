@@ -24,6 +24,7 @@ import { V4ControlsTop, V4ControlsBottom } from '../components/v4/V4Controls';
 import { buildWordTimings } from '../hooks/useV4Karaoke';
 import { useVideoCompletionTracker } from '../hooks/useVideoCompletionTracker';
 import KeepScreenAwake from '../components/KeepScreenAwake';
+import V4LectureNotesPanel from '../components/my-notes/V4LectureNotesPanel';
 
 type RouteProps = RouteProp<RootStackParamList, 'V4Player'>;
 type NavProps = NativeStackNavigationProp<RootStackParamList>;
@@ -137,6 +138,43 @@ export default function V4PlayerScreen() {
   const [subtitlesKilled, setSubtitlesKilled] = useState(false);
   const [subtitleMode, setSubtitleMode] = useState<SubtitleMode>('karaoke');
   const [wordTimings, setWordTimings] = useState<ReturnType<typeof buildWordTimings>>([]);
+
+  // Lecture-note editor panel. Playback keeps running while it's open.
+  const [notesOpen, setNotesOpen] = useState(false);
+  const notesFlushRef = useRef<(() => Promise<void>) | null>(null);
+  const toggleNotes = useCallback(() => {
+    if (!notesOpen) {
+      setNotesOpen(true);
+      return;
+    }
+    void Promise.resolve(notesFlushRef.current?.())
+      .catch(() => {})
+      .finally(() => setNotesOpen(false));
+  }, [notesOpen]);
+  const closeNotes = useCallback(() => setNotesOpen(false), []);
+  const registerNotesFlush = useCallback((flush: (() => Promise<void>) | null) => {
+    notesFlushRef.current = flush;
+  }, []);
+  const allowExitRef = useRef(false);
+  const closePlayer = useCallback(async () => {
+    try {
+      await notesFlushRef.current?.();
+    } catch {
+      // Every keystroke is already cached locally; cloud sync can retry later.
+    }
+    navigation.goBack();
+  }, [navigation]);
+
+  useEffect(() => {
+    return navigation.addListener('beforeRemove', (event) => {
+      if (allowExitRef.current || !notesOpen || !notesFlushRef.current) return;
+      event.preventDefault();
+      void notesFlushRef.current().catch(() => {}).finally(() => {
+        allowExitRef.current = true;
+        navigation.dispatch(event.data.action);
+      });
+    });
+  }, [navigation, notesOpen]);
 
   // Fullscreen overlay controls visibility
   const controlsOpacity = useRef(new Animated.Value(1)).current;
@@ -658,7 +696,9 @@ export default function V4PlayerScreen() {
             title={presentation?.presentation_title || ''}
             sections={presentation?.sections || []}
             currentIndex={currentIndex}
-            onClose={() => navigation.goBack()}
+            onClose={closePlayer}
+            onNotes={toggleNotes}
+            notesActive={notesOpen}
           />
           <View style={styles.fsSpacer} />
           <V4ControlsBottom
@@ -715,6 +755,20 @@ export default function V4PlayerScreen() {
             )}
           </View>
         )}
+
+        {/* Landscape/fullscreen side panel — playback keeps running to its left */}
+        <V4LectureNotesPanel
+          visible={notesOpen}
+          variant="side"
+          jobId={jobId}
+          subjectId={subjectId}
+          chapterId={chapterId}
+          topicId={topicId}
+          topicTitle={topicTitle || presentation?.presentation_title}
+          insets={insets}
+          onRequestClose={closeNotes}
+          onFlushReady={registerNotesFlush}
+        />
       </View>
     );
   }
@@ -728,7 +782,9 @@ export default function V4PlayerScreen() {
         title={presentation?.presentation_title || ''}
         sections={presentation?.sections || []}
         currentIndex={currentIndex}
-        onClose={() => navigation.goBack()}
+        onClose={closePlayer}
+        onNotes={toggleNotes}
+        notesActive={notesOpen}
       />
 
       {/* 16:9 stage */}
@@ -864,6 +920,20 @@ export default function V4PlayerScreen() {
           )}
         </View>
       )}
+
+      {/* Portrait keyboard-safe bottom sheet — playback keeps running behind it */}
+      <V4LectureNotesPanel
+        visible={notesOpen}
+        variant="portrait"
+        jobId={jobId}
+        subjectId={subjectId}
+        chapterId={chapterId}
+        topicId={topicId}
+        topicTitle={topicTitle || presentation?.presentation_title}
+        insets={insets}
+        onRequestClose={closeNotes}
+        onFlushReady={registerNotesFlush}
+      />
     </View>
   );
 }
