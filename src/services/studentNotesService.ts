@@ -931,6 +931,36 @@ export interface RealtimeChange {
   old: Record<string, unknown> | null;
 }
 
+export type RealtimeNoteDecision =
+  | { action: 'ignore' }
+  | { action: 'apply'; content: string }
+  | { action: 'clear' }
+  | { action: 'fetch' };
+
+/**
+ * Decide how the editor should handle a matching Realtime event without
+ * entering its initial loading flow.
+ */
+export function decideRealtimeNoteUpdate(
+  change: RealtimeChange,
+  currentContent: string,
+  hasPendingLocalEdit: boolean,
+): RealtimeNoteDecision {
+  if (hasPendingLocalEdit) return { action: 'ignore' };
+  if (change.eventType === 'DELETE') return { action: 'clear' };
+
+  const incoming = change.new?.content;
+  if (typeof incoming === 'string') {
+    return incoming === currentContent
+      ? { action: 'ignore' }
+      : { action: 'apply', content: incoming };
+  }
+
+  // Some Realtime configurations omit non-key columns. Fetch quietly rather
+  // than treating the event as an initial editor load.
+  return { action: 'fetch' };
+}
+
 export async function subscribeToStudentNotes(
   studentId: string,
   onChange: (change: RealtimeChange) => void,

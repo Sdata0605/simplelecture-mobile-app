@@ -45,6 +45,7 @@ import {
   buildTopicTitleMap,
   isAggregateStale,
   noteRowMatchesContext,
+  decideRealtimeNoteUpdate,
   subscribeToStudentNotes,
   countWords,
   type LocalNoteContext,
@@ -139,6 +140,13 @@ export function useStudentNoteEditor(
         : aggregateJobId(subjectId, chapterId)
       : '';
   const effectiveTopicId: string | null = isLecture ? overrideTopicId! : null;
+  const contextKey = ready
+    ? `${userId}|${effectiveJobId}|${subjectId}|${chapterId}|${effectiveTopicId ?? 'null'}`
+    : '';
+  // Updated during render so async work from an old chapter/lecture can verify
+  // its result still belongs to the editor currently on screen.
+  const activeContextKeyRef = useRef(contextKey);
+  activeContextKeyRef.current = contextKey;
 
   const localCtx = useCallback((): LocalNoteContext | null => {
     if (!userId || !subjectId || !chapterId) return null;
@@ -364,6 +372,48 @@ export function useStudentNoteEditor(
     saveNow,
   ]);
 
+  // Fetch only the active cloud row and reconcile it in place. Unlike reload(),
+  // this never toggles `loading` or `status: loading`, so the TextInput remains
+  // mounted and focused while background sync happens.
+  const syncFromCloudSilently = useCallback(async () => {
+    if (!userId || !subjectId || !chapterId || pendingRef.current || debounceRef.current) return;
+    const requestedContextKey = contextKey;
+    try {
+      const res = await fetchSingleNote(
+        userId,
+        effectiveJobId,
+        subjectId,
+        chapterId,
+        effectiveTopicId,
+      );
+      if (
+        !res.success ||
+        !mountedRef.current ||
+        activeContextKeyRef.current !== requestedContextKey ||
+        pendingRef.current ||
+        debounceRef.current
+      ) return;
+      const incoming = res.data?.content ?? '';
+      if (incoming === latestTextRef.current) return;
+      applyValue(incoming);
+      persistLocal(incoming, false);
+      setPending(false);
+      setStatus('saved');
+    } catch {
+      // Background sync is best-effort; never disturb the active editor.
+    }
+  }, [
+    userId,
+    subjectId,
+    chapterId,
+    effectiveJobId,
+    effectiveTopicId,
+    contextKey,
+    applyValue,
+    persistLocal,
+    setPending,
+  ]);
+
   // Reload whenever the target note changes.
   useEffect(() => {
     if (!ready) return;
@@ -371,7 +421,7 @@ export function useStudentNoteEditor(
     return () => clearDebounce();
   }, [ready, reload, clearDebounce]);
 
-  // --- Realtime: reload this note on remote changes, unless typing --------
+  // --- Realtime: reconcile in place without unmounting the editor ----------
   useEffect(() => {
     if (!ready || !userId) return;
     let unsub: (() => void) | null = null;
@@ -386,14 +436,29 @@ export function useStudentNoteEditor(
     };
 
     const onChange = (change: RealtimeChange) => {
+      // An already-queued event from the subscription being torn down must not
+      // touch the newly selected chapter/lecture.
+      if (activeContextKeyRef.current !== contextKey) return;
       // Only react to changes for THIS exact note context.
       const matches =
         noteRowMatchesContext(change.new, matchCtx) ||
         noteRowMatchesContext(change.old, matchCtx);
       if (!matches) return;
-      // Never clobber in-progress local edits with a remote reload.
-      if (pendingRef.current || debounceRef.current) return;
-      void reload();
+      const decision = decideRealtimeNoteUpdate(
+        change,
+        latestTextRef.current,
+        pendingRef.current || !!debounceRef.current,
+      );
+      if (decision.action === 'ignore') return;
+      if (decision.action === 'fetch') {
+        void syncFromCloudSilently();
+        return;
+      }
+      const incoming = decision.action === 'clear' ? '' : decision.content;
+      applyValue(incoming);
+      persistLocal(incoming, false);
+      setPending(false);
+      setStatus('saved');
     };
 
     subscribeToStudentNotes(userId, onChange)
@@ -431,7 +496,11 @@ export function useStudentNoteEditor(
     chapterId,
     effectiveJobId,
     effectiveTopicId,
-    reload,
+    contextKey,
+    applyValue,
+    persistLocal,
+    setPending,
+    syncFromCloudSilently,
   ]);
 
   // --- Typing: persist local immediately + schedule debounced cloud save --

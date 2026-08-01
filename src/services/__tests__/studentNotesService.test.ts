@@ -11,6 +11,7 @@ import {
   isLectureContext,
   parseLocalNoteMeta,
   noteRowMatchesContext,
+  decideRealtimeNoteUpdate,
   countBySubject,
   countWords,
   buildAggregateContent,
@@ -251,6 +252,62 @@ describe('noteRowMatchesContext', () => {
   it('returns false for null/undefined rows', () => {
     expect(noteRowMatchesContext(null, ctx)).toBe(false);
     expect(noteRowMatchesContext(undefined, ctx)).toBe(false);
+  });
+});
+
+describe('decideRealtimeNoteUpdate', () => {
+  it('ignores a self-save echo with identical content', () => {
+    expect(
+      decideRealtimeNoteUpdate(
+        { eventType: 'UPDATE', new: { content: 'same' }, old: null },
+        'same',
+        false,
+      ),
+    ).toEqual({ action: 'ignore' });
+  });
+
+  it('applies genuinely different remote content silently', () => {
+    expect(
+      decideRealtimeNoteUpdate(
+        { eventType: 'UPDATE', new: { content: 'from phone B' }, old: null },
+        'from phone A',
+        false,
+      ),
+    ).toEqual({ action: 'apply', content: 'from phone B' });
+  });
+
+  it('protects unsaved local typing from remote updates and deletes', () => {
+    expect(
+      decideRealtimeNoteUpdate(
+        { eventType: 'UPDATE', new: { content: 'remote' }, old: null },
+        'typing',
+        true,
+      ),
+    ).toEqual({ action: 'ignore' });
+    expect(
+      decideRealtimeNoteUpdate(
+        { eventType: 'DELETE', new: null, old: { content: 'old' } },
+        'typing',
+        true,
+      ),
+    ).toEqual({ action: 'ignore' });
+  });
+
+  it('clears on a remote delete and quietly fetches incomplete payloads', () => {
+    expect(
+      decideRealtimeNoteUpdate(
+        { eventType: 'DELETE', new: null, old: { content: 'old' } },
+        'old',
+        false,
+      ),
+    ).toEqual({ action: 'clear' });
+    expect(
+      decideRealtimeNoteUpdate(
+        { eventType: 'UPDATE', new: { student_id: 'u1' }, old: null },
+        'current',
+        false,
+      ),
+    ).toEqual({ action: 'fetch' });
   });
 });
 
