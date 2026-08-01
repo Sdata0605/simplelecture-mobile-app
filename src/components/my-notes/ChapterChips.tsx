@@ -21,6 +21,7 @@ export default function ChapterChips({ chapters, selectedId, onSelect }: Chapter
   return (
     <ScrollView
       horizontal
+      style={styles.scroll}
       showsHorizontalScrollIndicator={false}
       contentContainerStyle={styles.row}
       testID="chapter-chips"
@@ -50,18 +51,24 @@ export default function ChapterChips({ chapters, selectedId, onSelect }: Chapter
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    flexGrow: 0,
+    flexShrink: 0,
+    height: 52,
+  },
   row: {
+    alignItems: 'center',
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    gap: spacing.sm,
+    paddingVertical: 6,
+    gap: 6,
   },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    maxWidth: 200,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
+    gap: 5,
+    height: 40,
+    maxWidth: 180,
+    paddingHorizontal: spacing.sm,
     borderRadius: borderRadius.full,
     backgroundColor: colors.gray100,
     borderWidth: 1,
