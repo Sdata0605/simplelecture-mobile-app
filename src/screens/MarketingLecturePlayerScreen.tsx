@@ -6,13 +6,21 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
+  StatusBar,
+  BackHandler,
+  GestureResponderEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio, Video, ResizeMode, VideoFullscreenUpdate } from 'expo-av';
+import { Audio, Video, ResizeMode, AVPlaybackStatus } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import V4LectureNotesPanel from '../components/my-notes/V4LectureNotesPanel';
+import {
+  formatMarketingVideoTime,
+  seekMillisFromPress,
+} from '../utils/marketingVideoControls';
 import {
   fetchV4Presentation,
   resolvePlaybackUrl,
@@ -32,6 +40,7 @@ const QUICK_ACTIONS = [
 ] as const;
 
 const PRIMARY = '#2BBD6E';
+const CONTROLS_HIDE_MS = 3000;
 
 /**
  * Marketing Lecture Player — plays a single pre-merged Vimeo progressive MP4.
@@ -42,12 +51,21 @@ const PRIMARY = '#2BBD6E';
  * context params exist). The MP4 URL is resolved at open time from the
  * lecture's presentation.json (vimeo_mp4_url / kannada_vimeo_mp4_url), never
  * hardcoded, so it survives Vimeo signature rotation. Progressive MP4 only —
- * no HLS, no proxying, no Vimeo iframe. Native fullscreen rotates landscape.
+ * no HLS, no proxying, no Vimeo iframe. Fullscreen is app-controlled so the
+ * course header, notes, and playback controls remain available in landscape.
  */
 export default function MarketingLecturePlayerScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<RootStackParamList, 'MarketingLecturePlayer'>>();
-  const { jobId, title, subtitle, topicId, initialLanguage } = route.params;
+  const {
+    jobId,
+    title,
+    subtitle,
+    topicId,
+    chapterId,
+    subjectId,
+    initialLanguage,
+  } = route.params;
   const insets = useSafeAreaInsets();
 
   // Quick actions only make sense when we came from Topic Details.
@@ -60,6 +78,19 @@ export default function MarketingLecturePlayerScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeQuickAction, setActiveQuickAction] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [positionMillis, setPositionMillis] = useState(0);
+  const [durationMillis, setDurationMillis] = useState(0);
+  const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seekWidthRef = useRef(1);
+  const pendingSeekRef = useRef(0);
+  const notesFlushRef = useRef<(() => Promise<void>) | null>(null);
+  const allowExitRef = useRef(false);
+
+  const canTakeNotes = !!topicId && !!chapterId && !!subjectId;
 
   // Same audio mode as the rest of the app so sound plays on iOS silent switch.
   useEffect(() => {
@@ -125,15 +156,70 @@ export default function MarketingLecturePlayerScreen() {
       if (!presentation || lang === language) return;
       const url = resolvePlaybackUrl(presentation, lang);
       if (!url) return;
+      pendingSeekRef.current = positionMillis;
       setLanguage(lang);
       setVideoUrl(url);
     },
-    [presentation, language],
+    [presentation, language, positionMillis],
   );
 
+  const clearControlsTimer = useCallback(() => {
+    if (controlsTimerRef.current) {
+      clearTimeout(controlsTimerRef.current);
+      controlsTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleControlsHide = useCallback(() => {
+    clearControlsTimer();
+    if (!isFullscreen || notesOpen || !isPlaying) return;
+    controlsTimerRef.current = setTimeout(() => {
+      setControlsVisible(false);
+    }, CONTROLS_HIDE_MS);
+  }, [clearControlsTimer, isFullscreen, notesOpen, isPlaying]);
+
+  const showControls = useCallback(() => {
+    setControlsVisible(true);
+    scheduleControlsHide();
+  }, [scheduleControlsHide]);
+
+  const leaveFullscreen = useCallback(() => {
+    clearControlsTimer();
+    setControlsVisible(true);
+    setIsFullscreen(false);
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+      .then(() => {
+        setTimeout(() => ScreenOrientation.unlockAsync().catch(() => {}), 300);
+      })
+      .catch(() => {});
+  }, [clearControlsTimer]);
+
+  const toggleFullscreen = useCallback(() => {
+    if (isFullscreen) {
+      leaveFullscreen();
+      return;
+    }
+    setIsFullscreen(true);
+    setControlsVisible(true);
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
+  }, [isFullscreen, leaveFullscreen]);
+
   const handleClose = useCallback(() => {
-    navigation.goBack();
-  }, [navigation]);
+    Promise.resolve(notesFlushRef.current?.())
+      .catch(() => {})
+      .finally(() => {
+        clearControlsTimer();
+        // The explicit header Close action exits the player immediately.
+        // Android/system back remains two-step via beforeRemove below.
+        allowExitRef.current = true;
+        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+          .then(() => {
+            setTimeout(() => ScreenOrientation.unlockAsync().catch(() => {}), 300);
+          })
+          .catch(() => {});
+        navigation.goBack();
+      });
+  }, [navigation, clearControlsTimer]);
 
   // Quick action: set openTab on the underlying TopicDetails route and go back —
   // same behavior as the AI Lecture Player's quick-action grid.
@@ -156,28 +242,110 @@ export default function MarketingLecturePlayerScreen() {
     [navigation],
   );
 
-  // Rotate to landscape while the native fullscreen is presented, back to
-  // portrait when dismissed — same pattern as the AI Lecture Player.
-  const handleFullscreenUpdate = useCallback(
-    ({ fullscreenUpdate }: { fullscreenUpdate: VideoFullscreenUpdate }) => {
-      if (fullscreenUpdate === VideoFullscreenUpdate.PLAYER_DID_PRESENT) {
-        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
-      } else if (fullscreenUpdate === VideoFullscreenUpdate.PLAYER_WILL_DISMISS) {
-        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
-          .then(() => {
-            setTimeout(() => {
-              ScreenOrientation.unlockAsync().catch(() => {});
-            }, 300);
-          })
-          .catch(() => {});
+  const togglePlayback = useCallback(() => {
+    setIsPlaying((playing) => {
+      if (playing) videoRef.current?.pauseAsync().catch(() => {});
+      else videoRef.current?.playAsync().catch(() => {});
+      return !playing;
+    });
+    showControls();
+  }, [showControls]);
+
+  const seekTo = useCallback((millis: number) => {
+    const target = Math.max(0, Math.min(durationMillis, millis));
+    setPositionMillis(target);
+    videoRef.current?.setPositionAsync(target).catch(() => {});
+    showControls();
+  }, [durationMillis, showControls]);
+
+  const handleSeekPress = useCallback((event: GestureResponderEvent) => {
+    seekTo(
+      seekMillisFromPress(
+        event.nativeEvent.locationX,
+        seekWidthRef.current,
+        durationMillis,
+      ),
+    );
+  }, [durationMillis, seekTo]);
+
+  const handlePlaybackStatus = useCallback((status: AVPlaybackStatus) => {
+    if (!status.isLoaded) return;
+    setPositionMillis(status.positionMillis);
+    setDurationMillis(status.durationMillis ?? 0);
+    setIsPlaying(status.isPlaying);
+  }, []);
+
+  const handleVideoLoad = useCallback(async () => {
+    const target = pendingSeekRef.current;
+    if (target > 0) {
+      pendingSeekRef.current = 0;
+      await videoRef.current?.setPositionAsync(target).catch(() => {});
+    }
+  }, []);
+
+  const closeNotes = useCallback(() => {
+    Promise.resolve(notesFlushRef.current?.())
+      .catch(() => {})
+      .finally(() => {
+        setNotesOpen(false);
+        showControls();
+      });
+  }, [showControls]);
+
+  const toggleNotes = useCallback(() => {
+    if (!canTakeNotes) return;
+    if (notesOpen) {
+      closeNotes();
+      return;
+    }
+    clearControlsTimer();
+    setControlsVisible(true);
+    setNotesOpen(true);
+  }, [canTakeNotes, notesOpen, closeNotes, clearControlsTimer]);
+
+  useEffect(() => {
+    if (isFullscreen) scheduleControlsHide();
+    else clearControlsTimer();
+  }, [isFullscreen, isPlaying, notesOpen, scheduleControlsHide, clearControlsTimer]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (notesOpen) {
+        closeNotes();
+        return true;
       }
-    },
-    [],
-  );
+      if (isFullscreen) {
+        leaveFullscreen();
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [notesOpen, isFullscreen, closeNotes, leaveFullscreen]);
+
+  useEffect(() => {
+    return navigation.addListener('beforeRemove', (event: any) => {
+      if (allowExitRef.current) return;
+      if (isFullscreen) {
+        event.preventDefault();
+        leaveFullscreen();
+        return;
+      }
+      if (!notesFlushRef.current) return;
+      event.preventDefault();
+      Promise.resolve(notesFlushRef.current())
+        .catch(() => {})
+        .finally(() => {
+          allowExitRef.current = true;
+          navigation.dispatch(event.data.action);
+        });
+    });
+  }, [navigation, isFullscreen, leaveFullscreen]);
 
   // Safety: never leave the app stuck in landscape after this screen closes.
   useEffect(() => {
     return () => {
+      clearControlsTimer();
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
         .then(() => {
           setTimeout(() => {
@@ -186,45 +354,143 @@ export default function MarketingLecturePlayerScreen() {
         })
         .catch(() => {});
     };
-  }, []);
+  }, [clearControlsTimer]);
 
-  return (
-    <View style={styles.container}>
-      {/* Header — same dark indigo style as the AI Lecture Player */}
-      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          {title}
-        </Text>
-        {showLanguageSwitcher && (
-          <View style={styles.langSwitcher}>
-            {(['english', 'kannada'] as PlayerLanguage[]).map((lang) => (
-              <TouchableOpacity
-                key={lang}
-                style={[styles.langChip, language === lang && styles.langChipActive]}
-                onPress={() => switchLanguage(lang)}
-                accessibilityLabel={`Switch to ${lang}`}
-                data-testid={`button-lang-${lang}`}
-              >
-                <Text style={[styles.langChipText, language === lang && styles.langChipTextActive]}>
-                  {lang === 'english' ? 'EN' : 'ಕ'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
+  const progress =
+    durationMillis > 0 ? Math.min(1, positionMillis / durationMillis) : 0;
+
+  const playerHeader = (overlay = false) => (
+    <View
+      style={[
+        styles.header,
+        overlay && styles.headerOverlay,
+        {
+          paddingTop: insets.top + 6,
+          paddingLeft: 12 + (overlay ? insets.left : 0),
+          paddingRight: 12 + (overlay ? insets.right : 0),
+        },
+      ]}
+    >
+      <Text style={styles.headerTitle} numberOfLines={1}>
+        {title}
+      </Text>
+      {showLanguageSwitcher && (
+        <View style={styles.langSwitcher}>
+          {(['english', 'kannada'] as PlayerLanguage[]).map((lang) => (
+            <TouchableOpacity
+              key={lang}
+              style={[styles.langChip, language === lang && styles.langChipActive]}
+              onPress={() => switchLanguage(lang)}
+              accessibilityLabel={`Switch to ${lang}`}
+              data-testid={`button-lang-${lang}`}
+            >
+              <Text style={[styles.langChipText, language === lang && styles.langChipTextActive]}>
+                {lang === 'english' ? 'EN' : 'ಕ'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+      {canTakeNotes && (
         <TouchableOpacity
-          style={styles.headerClose}
-          onPress={handleClose}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityLabel="Close video"
-          data-testid="button-close-marketing-player"
+          style={[styles.headerAction, notesOpen && styles.headerActionActive]}
+          onPress={toggleNotes}
+          accessibilityLabel="Open lecture notes"
+          data-testid="button-marketing-notes"
         >
-          <Ionicons name="close" size={20} color="#FFFFFF" />
+          <Ionicons
+            name={notesOpen ? 'create' : 'create-outline'}
+            size={17}
+            color={notesOpen ? '#f6c44e' : '#FFFFFF'}
+          />
+          <Text style={[styles.headerActionText, notesOpen && styles.headerActionTextActive]}>
+            Notes
+          </Text>
+        </TouchableOpacity>
+      )}
+      <TouchableOpacity
+        style={styles.headerClose}
+        onPress={handleClose}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        accessibilityLabel="Close video"
+        data-testid="button-close-marketing-player"
+      >
+        <Ionicons name="close" size={20} color="#FFFFFF" />
+      </TouchableOpacity>
+    </View>
+  );
+
+  const playbackControls = (
+    <View style={styles.playbackControls}>
+      <View style={styles.seekRow}>
+        <Text style={styles.timeText}>{formatMarketingVideoTime(positionMillis)}</Text>
+        <TouchableOpacity
+          style={styles.seekHitArea}
+          activeOpacity={1}
+          onLayout={(event) => {
+            seekWidthRef.current = Math.max(1, event.nativeEvent.layout.width);
+          }}
+          onPress={handleSeekPress}
+          accessibilityLabel="Seek video"
+        >
+          <View style={styles.seekTrack}>
+            <View style={[styles.seekFill, { width: `${progress * 100}%` }]} />
+          </View>
+          <View style={[styles.seekThumb, { left: `${progress * 100}%` }]} />
+        </TouchableOpacity>
+        <Text style={styles.timeText}>{formatMarketingVideoTime(durationMillis)}</Text>
+      </View>
+      <View style={styles.controlsRow}>
+        <TouchableOpacity
+          style={styles.controlButton}
+          onPress={() => seekTo(positionMillis - 10000)}
+          accessibilityLabel="Rewind 10 seconds"
+        >
+          <Ionicons name="play-back" size={20} color="#FFFFFF" />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.playButton}
+          onPress={togglePlayback}
+          accessibilityLabel={isPlaying ? 'Pause video' : 'Play video'}
+        >
+          <Ionicons
+            name={isPlaying ? 'pause' : 'play'}
+            size={28}
+            color="#FFFFFF"
+            style={isPlaying ? undefined : { marginLeft: 3 }}
+          />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.controlButton}
+          onPress={() => seekTo(positionMillis + 10000)}
+          accessibilityLabel="Forward 10 seconds"
+        >
+          <Ionicons name="play-forward" size={20} color="#FFFFFF" />
+        </TouchableOpacity>
+        <View style={styles.controlsSpacer} />
+        <TouchableOpacity
+          style={styles.controlButton}
+          onPress={toggleFullscreen}
+          accessibilityLabel={isFullscreen ? 'Exit full screen' : 'Enter full screen'}
+          data-testid="button-marketing-fullscreen"
+        >
+          <Ionicons name={isFullscreen ? 'contract' : 'expand'} size={22} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
+    </View>
+  );
 
-      {/* Video — fixed 16:9 strip pinned below the header, like the AI player */}
-      <View style={styles.videoStage}>
+  return (
+    <View style={[styles.container, isFullscreen && styles.containerFullscreen]}>
+      <StatusBar
+        hidden={isFullscreen}
+        barStyle="light-content"
+        backgroundColor="#0f0f1a"
+      />
+      {!isFullscreen && playerHeader()}
+
+      {/* A single Video surface is resized between portrait and landscape. */}
+      <View style={[styles.videoStage, isFullscreen && styles.videoStageFullscreen]}>
         {loading && (
           <View style={styles.centerFill}>
             <ActivityIndicator size="large" color="#FFFFFF" />
@@ -255,18 +521,47 @@ export default function MarketingLecturePlayerScreen() {
             source={{ uri: videoUrl }}
             style={styles.video}
             resizeMode={ResizeMode.CONTAIN}
-            shouldPlay
-            useNativeControls
-            onFullscreenUpdate={handleFullscreenUpdate}
+            shouldPlay={isPlaying}
+            useNativeControls={false}
+            progressUpdateIntervalMillis={250}
+            onPlaybackStatusUpdate={handlePlaybackStatus}
+            onLoad={handleVideoLoad}
             onError={(e) => {
               console.warn('[MarketingLecturePlayer] Playback error:', e);
               setError('Could not play this video. Please try again later.');
             }}
           />
         )}
+        {!loading && !error && videoUrl && (
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => {
+              if (!isFullscreen) {
+                setControlsVisible((visible) => !visible);
+                return;
+              }
+              if (controlsVisible) {
+                clearControlsTimer();
+                setControlsVisible(false);
+              } else {
+                showControls();
+              }
+            }}
+            accessibilityLabel="Show or hide video controls"
+          />
+        )}
+        {controlsVisible && !loading && !error && (
+          <View style={styles.controlsOverlay} pointerEvents="box-none">
+            {isFullscreen && playerHeader(true)}
+            <View style={styles.overlaySpacer} pointerEvents="none" />
+            {playbackControls}
+          </View>
+        )}
       </View>
 
       {/* White area below the video — quick actions when opened from a topic */}
+      {!isFullscreen && (
       <ScrollView style={styles.belowScroll} showsVerticalScrollIndicator={false}>
         <View style={styles.topicRow}>
           <TouchableOpacity onPress={handleClose} style={{ padding: 4 }} data-testid="button-back-marketing">
@@ -302,6 +597,22 @@ export default function MarketingLecturePlayerScreen() {
           </>
         )}
       </ScrollView>
+      )}
+
+      <V4LectureNotesPanel
+        visible={notesOpen}
+        variant={isFullscreen ? 'side' : 'portrait'}
+        jobId={jobId}
+        subjectId={subjectId}
+        chapterId={chapterId}
+        topicId={topicId}
+        topicTitle={title}
+        insets={insets}
+        onRequestClose={closeNotes}
+        onFlushReady={(flush) => {
+          notesFlushRef.current = flush;
+        }}
+      />
     </View>
   );
 }
@@ -311,15 +622,20 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ffffff',
   },
+  containerFullscreen: {
+    backgroundColor: '#000000',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
     paddingBottom: 6,
     backgroundColor: 'rgba(15, 15, 26, 0.98)',
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(99, 102, 241, 0.2)',
     gap: 8,
+  },
+  headerOverlay: {
+    backgroundColor: 'rgba(10, 10, 18, 0.88)',
   },
   headerTitle: {
     flex: 1,
@@ -329,6 +645,30 @@ const styles = StyleSheet.create({
   },
   headerClose: {
     padding: 6,
+  },
+  headerAction: {
+    height: 28,
+    borderRadius: 14,
+    paddingHorizontal: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  headerActionActive: {
+    borderColor: 'rgba(246,196,78,0.65)',
+    backgroundColor: 'rgba(246,196,78,0.14)',
+  },
+  headerActionText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  headerActionTextActive: {
+    color: '#f6c44e',
   },
   langSwitcher: {
     flexDirection: 'row',
@@ -362,10 +702,92 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     overflow: 'hidden',
   },
+  videoStageFullscreen: {
+    flex: 1,
+    aspectRatio: undefined,
+  },
   video: {
     width: '100%',
     height: '100%',
     backgroundColor: '#000',
+  },
+  controlsOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(0,0,0,0.12)',
+  },
+  overlaySpacer: {
+    flex: 1,
+  },
+  playbackControls: {
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 10,
+    backgroundColor: 'rgba(0,0,0,0.78)',
+  },
+  seekRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  timeText: {
+    minWidth: 38,
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    textAlign: 'center',
+  },
+  seekHitArea: {
+    flex: 1,
+    height: 24,
+    justifyContent: 'center',
+  },
+  seekTrack: {
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.28)',
+  },
+  seekFill: {
+    height: '100%',
+    borderRadius: 2,
+    backgroundColor: '#2BBD6E',
+  },
+  seekThumb: {
+    position: 'absolute',
+    marginLeft: -6,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#2BBD6E',
+  },
+  controlsRow: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 14,
+  },
+  controlsSpacer: {
+    flex: 1,
+  },
+  controlButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  playButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.32)',
   },
   centerFill: {
     flex: 1,
