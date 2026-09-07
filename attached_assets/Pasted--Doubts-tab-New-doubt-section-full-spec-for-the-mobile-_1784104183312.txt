@@ -1,0 +1,200 @@
+## Doubts tab — "+ New doubt" section, full spec for the mobile app
+
+This document is what you can paste to Replit AI (or any mobile-app agent) to rebuild the same feature. It covers **purpose, UI, data model, storage, backend contract, and every rule** that governs the section. No code changes are proposed here — it is a specification.
+
+---
+
+### 1. Purpose
+
+The Doubts tab lets a student ask **subject-scoped questions** and get grounded answers from the AI, with a **left panel of past conversation threads** (like ChatGPT history) so they can revisit or continue previous doubts.
+
+The **"+ New doubt"** button at the top of that left panel starts a **fresh, empty thread** for the current subject and makes it active. Every question the student asks after that lands inside this new thread, keeping different topics separate.
+
+Key promises:
+- Threads are **per subject** (each subject has its own history).
+- Threads are **per device** (stored locally, not on the server) — no cross-device sync.
+- Answers are **grounded in that subject's Notes** (published lecture notes + uploaded documents). If not found there, a fallback path runs, otherwise the assistant explicitly says "not covered".
+
+---
+
+### 2. Left panel anatomy
+
+```
+┌────────────────────────────┐
+│ [+ New doubt]              │  ← Button (primary action of this section)
+├────────────────────────────┤
+│ 💬 explain transporta…   │
+│    23m ago            🗑  │  ← thread row: icon + title + relative time + hover-delete
+│                            │
+│ 💬 New doubt              │  ← placeholder title until first user message
+│    25m ago            🗑  │
+│                            │
+│ 💬 hii                    │
+│    25m ago            🗑  │
+└────────────────────────────┘
+```
+
+Rules for the panel:
+- Threads are **sorted by `updatedAt` DESC** (most recently active on top).
+- The active thread is highlighted with a subtle background.
+- Row shows: chat icon, thread title (single-line truncate), relative time (`just now`, `Xm ago`, `Xh ago`, `Xd ago`, then locale date after 7 days).
+- Trash icon shows on hover / long-press → opens an **AlertDialog confirm** "Delete this doubt? This will permanently remove the conversation from this device." → Cancel / Delete.
+- Empty state text: *"No past doubts yet. Ask something to start."*
+- On desktop the panel is a fixed 240px column pinned to the left of the chat.
+- On mobile the same panel is inside a slide-in **Sheet** opened by a "History" button in the header; selecting a thread or tapping "+ New doubt" closes the sheet automatically.
+
+---
+
+### 3. "+ New doubt" behavior (exact rules)
+
+1. Creates a new thread object with:
+   - `id`: fresh UUID (crypto.randomUUID with a `t_<timestamp>_<rand>` fallback).
+   - `title`: `"New doubt"` (placeholder).
+   - `createdAt`, `updatedAt`: `Date.now()`.
+   - `messages`: `[]`.
+2. **Prepends** the thread to the list (so it appears on top of the sidebar).
+3. Sets it as the **active** thread; the main chat area now shows an empty conversation with the greeting/suggestions.
+4. Placeholder title remains `"New doubt"` until the student sends their first message. On first user message, title is replaced with the trimmed first user message (whitespace collapsed, max 60 chars, ellipsis if longer). See rule 5 below.
+5. Title auto-generation logic:
+   - When the messages array changes and the current title is still the placeholder, take the first `role === "user"` message, trim + collapse spaces, cap at 57 chars + "…" if longer than 60.
+   - Once a real title exists, it is never overwritten by later messages.
+
+Rate limit / abuse: none locally; server has its own per-model rate handling.
+
+---
+
+### 4. Thread data model (client-side)
+
+Single TypeScript shape used by every storage/read path:
+
+```ts
+type DoubtStoredMessage = {
+  role: "user" | "assistant";
+  content: string;
+  suggestions?: { text: string; chapterTitle?: string; topicTitle?: string | null }[];
+  importantQuestions?: { id: string; text: string; chapterTitle: string; topicTitle?: string | null; marks?: number|null; difficulty?: string|null }[];
+  sources?: { chapterTitle: string; topicTitle: string | null }[];
+};
+
+type DoubtThread = {
+  id: string;
+  title: string;
+  createdAt: number; // epoch ms
+  updatedAt: number; // epoch ms; bumped on every message append
+  messages: DoubtStoredMessage[]; // capped at last 30 on save
+};
+```
+
+---
+
+### 5. Storage (mobile equivalent)
+
+Web app uses `localStorage`; on mobile use the platform's key-value store (AsyncStorage / SecureStorage / MMKV — anything durable per device).
+
+Keys:
+- Primary: `doubts-threads:<subjectId>` → JSON of `DoubtThread[]`.
+- Legacy (one-time migration only, then deleted): `doubts-chat:<subjectId>` → older flat `DoubtStoredMessage[]`; if the primary key is empty and this legacy key exists, wrap it into a single thread titled from its first user message.
+
+Rules:
+- Storage is **scoped by `subjectId`**. Switching subjects reloads a different set of threads.
+- On save, trim each thread's `messages` to the **last 30** to bound size.
+- No server sync. Deleting a thread only removes it from this device.
+
+---
+
+### 6. Chat area behaviors
+
+- Auto-scroll to the newest message on every messages update and on `isLoading` toggle.
+- While waiting for the server: show a typing indicator, disable the send button, keep the input focused.
+- Voice input: hold-to-speak / toggle mic uses Web Speech API (`en-IN`). Mobile equivalent: platform speech recognizer; must acquire a global "voice lock" so it doesn't conflict with other in-app voice features (Sales Assistant, AI Teaching Assistant).
+- Enter sends the message; Shift+Enter for newline. Mobile: send button in composer; multiline textarea.
+- After the assistant replies, the message may include:
+  - **Suggestion chips**: up to 6 follow-up prompts. Tapping one sends that exact string.
+  - **Important questions**: curated question list from the subject's important-questions bank.
+  - **Sources**: chapter › topic breadcrumbs used to ground the answer (rendered at bottom of the assistant bubble in muted text).
+  - Only the **latest** assistant message keeps its suggestion/importantQuestions chips; older ones have them stripped (see rule below).
+- When the user sends a new message, previous assistant messages get `suggestions = undefined` and `importantQuestions = undefined` so only the newest turn shows chips.
+- On error, the last user message is **rolled back** into the input field so the student can retry without retyping.
+
+---
+
+### 7. Backend contract
+
+The mobile app should call the same Supabase Edge Function (or its future REST equivalent), so behavior stays identical across platforms.
+
+**Endpoint:** `supabase.functions.invoke("ai-doubts-chat", { body })`
+
+**Request body:**
+```json
+{
+  "question": "explain transportation in human beings",
+  "subjectId": "ceaf73fb-528a-4d4a-947c-4a7be304db2b",
+  "messages": [ /* prior DoubtStoredMessage[] for context */ ],
+  "studentId": "<auth user id or null>"
+}
+```
+
+**Response (grounded, from Notes):**
+```json
+{
+  "answer": "…markdown / katex allowed…",
+  "suggestions": [{ "text": "…", "chapterTitle": "…", "topicTitle": "…" }],
+  "importantQuestions": [{ "id": "…", "text": "…", "chapterTitle": "…", "topicTitle": "…", "marks": 3, "difficulty": "medium" }],
+  "sources": [{ "chapterTitle": "…", "topicTitle": "…" }],
+  "modelUsed": "google/gemini-2.5-flash"
+}
+```
+
+**Response (out-of-scope / not in Notes):** answer becomes the fixed refusal string; `sources` may be empty.
+**Response (server-wide load):** `answer` becomes a "try again in a few seconds" line with `fallback: true`.
+
+**Suggestion enrichment on the client:**
+- In parallel with the AI call, the client also calls `supabase.rpc("find_similar_questions", { p_text, p_subject_id, p_topic_id: null, p_limit: 6 })` and merges those DB matches (deduped by lowercased text) BEFORE the AI's suggestions, capped at 6. Mobile app should do the same.
+
+**Errors surfaced to UI:**
+- `429`: "AI is rate-limited, retry shortly."
+- `402`: "Credits exhausted — top up in Settings."
+- Any other: toast with server message; roll back the user's last message into the composer.
+
+---
+
+### 8. Preview / free-trial gating (optional for mobile)
+
+For unpurchased courses the web app enforces a `previewLimit` per course via `preview-doubts-asks-<courseId>` counter in localStorage. When exceeded, an `onPreviewQuotaExceeded` callback fires (which opens the buy-course sheet). Reuse the same counter format for parity on mobile.
+
+---
+
+### 9. Accessibility & UX rules
+
+- Delete button has `aria-label="Delete doubt thread"`.
+- Confirm dialog is a real accessible dialog (mobile: platform Alert).
+- All interactive rows are keyboard/focus reachable.
+- Long thread titles never wrap — single-line truncate with ellipsis; full title in a tooltip / long-press preview.
+- Time labels update passively on re-render; no live timer needed.
+
+---
+
+### 10. What to build on mobile — checklist for Replit AI
+
+- [ ] New "Doubts" screen scoped to the current subject.
+- [ ] Left/drawer panel with `+ New doubt` button, thread list, hover/long-press delete with confirm dialog.
+- [ ] Per-device, per-subject persistence (AsyncStorage or equivalent) using the exact keys and JSON shape above; run the legacy `doubts-chat:<subjectId>` → threads migration once.
+- [ ] Threads sorted by `updatedAt` DESC; placeholder title `"New doubt"` replaced by trimmed first user message.
+- [ ] Chat view with markdown + LaTeX rendering, suggestion chips, important-questions list, sources footer, auto-scroll, disabled send while loading, rollback-on-error.
+- [ ] Voice input with a global voice lock.
+- [ ] Call `ai-doubts-chat` edge function and `find_similar_questions` RPC in parallel; merge suggestions the same way.
+- [ ] Error toasts for 429 / 402 / generic; input rollback on failure.
+- [ ] Reset all state on subject change (rehydrate threads for the new `subjectId`, select the most recent).
+- [ ] Preview quota counter for un-enrolled courses if applicable.
+
+---
+
+### 11. File pointers (for reference while implementing)
+
+- Web thread panel + "+ New doubt" button: `src/components/learning/doubts/DoubtThreadSidebar.tsx`
+- Thread store, keys, migration: `src/components/learning/doubts/doubtThreadsStore.ts`
+- Main chat page (state, send flow, suggestions merge, error rollback, voice, auto-scroll): `src/components/learning/DoubtsTab.tsx`
+- Backend logic (retrieval, grounded answering, refusal, fallback): `supabase/functions/ai-doubts-chat/index.ts`
+- Similar-questions RPC: `find_similar_questions` (Supabase Postgres function)
+
+Confirm and I can drop this same content into a `DOUBTS_MOBILE_SPEC.md` in the repo so you can share the file directly with Replit AI.

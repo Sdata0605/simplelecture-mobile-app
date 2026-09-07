@@ -1,0 +1,25 @@
+- [Study Timetable schema](study-timetable-schema.md) — plan title/deadline/scope live in plan_metadata; mode is auto/manual; self_tests use total_questions + chapter_ids/topic_ids.
+- [Auto chapter tests](auto-chapter-tests.md) — created server-side after badge on lecture completion; pending check must use self_tests.submitted_at, not auto_chapter_tests.status.
+- [MCQ embedded options](question-text-embedded-options.md) — question_text sometimes duplicates the choices inline; strip at display time via stripEmbeddedOptions, value-matched, never edit the data.
+- [EAS builds](eas-builds.md) — prefix `EAS_NO_VCS=1` (sandbox blocks git archiving); CLI may die mid-compress but still submits — verify via build:list, don't re-run blindly.
+- [Self-tests / My Tests](self-tests-feature.md) — 3 tables (self_tests/_questions/_answers); status derived from time not DB col; answer key=question row id; client-only window enforcement.
+- [study-timetable-ai edge fn](study-timetable-ai-edge-fn.md) — deployed-only AI plan contract; items[] is load-bearing (empty=blank calendar), studentId from JWT, deadline must be local YYYY-MM-DD.
+- [V4 merged video single surface](v4-merged-video-single-surface.md) — only ONE live expo-av Video decoder on Android (two = setSurface/Released crash); swap source per section, rely on disk cache.
+- [Native video custom fullscreen](native-video-custom-fullscreen.md) — custom headers/notes cannot overlay expo-av native fullscreen; rotate one app-controlled video surface instead.
+- [YouTube embed in webview](youtube-webview-embed.md) — host the IFrame API in HTML via source.html+baseUrl (a NON-youtube origin); never nav directly to /embed (=153); no desktop UA, mute=1.
+- [AI Teaching Assistant direct URL](ai-teaching-assistant-direct-url.md) — direct URL (proxy 150s cap); manim/images arrive as TOP-LEVEL index-keyed maps, not per-slide; SDK54 root expo-file-system downloadAsync THROWS — use /legacy.
+- [AI nav gate (mobile)](ai-nav-gate-mobile.md) — slow-AI-answer resilience is screen-local (no provider); beforeRemove gates header/swipe/hardware back; reads refs not state; clear ref before dispatch to avoid loop.
+- [AI player avatar↔section binding](ai-player-avatar-section-binding.md) — bind avatar to displayed section via sync refs + target/token + per-layer section tags; newest tap supersedes; gate old layer's status events while swap pending.
+- [AI tab loading & Android keyboard](ai-tab-loading-and-keyboard.md) — aiLoading must release in finally or taps deadlock; Android KAV behavior=undefined (native resize), iOS padding.
+- [AI presentation playback teardown](ai-presentation-playback-teardown.md) — narration is a self-rescheduling chain; unloading the current sound isn't enough — use a generation ref + one stopPresentationPlayback() everywhere.
+- [Mobile custom auth refresh](mobile-custom-auth-refresh.md) — hand-rolled Supabase auth; route every token read through getAccessToken/getValidAccessToken; only logout on explicit invalid-grant, never bare HTTP status.
+- [Play upload key reset](play-upload-key.md) — original upload key lost; the RESET key == local android_keystore.jks; production AABs MUST stay credentialsSource:local, never regenerate.
+- [protobufjs firewall block](protobufjs-firewall-block.md) — Socket blocks ALL protobufjs (via RNFirebase→firebase JS→grpc) + jspdf@3 locally; fix: vendored tarball override (absolute file path) + jspdf@4. EAS builds unaffected.
+- [FCM push broadcast](fcm-push-broadcast.md) — broadcast = 1 FCM v1 send per user_push_tokens row; data must be flat strings; prune tokens ONLY on errorCode UNREGISTERED, never bare 404/INVALID_ARGUMENT.
+- [Supabase Management API](supabase-management-api.md) — use curl not python urllib (Cloudflare 1010 bans urllib UA); deploy fns via --use-api; set secrets/run SQL via /v1/projects/{ref} endpoints.
+- [Supabase new API keys](supabase-new-api-keys.md) — service-role edge fns now expect the 41-char sb_secret_ key, NOT the legacy JWT (which still works on REST/admin — the trap); deploy via --use-api.
+- [Mobile Jest harness](mobile-jest-harness.md) — test the giant supabase.ts under node Jest: only AsyncStorage import; map it to in-memory mock + install a swappable global.fetch delegator in setupFiles BEFORE import (else the retry interceptor breaks).
+- [Session never ends invariant](mobile-session-never-ends.md) — refresh failures must be transient (never throw/logout) except definitive invalid_grant; checkAuth must not setUser(null); all login paths refuse half-logins.
+- [AI presentation media preload](ai-presentation-media-preload.md) — every per-slide media type (audio AND images) must be pre-downloaded before playback or it desyncs; preload images concurrently with audio.
+- [Student notes nullable aggregate](student-notes-null-aggregate.md) — aggregate chapter notes need explicit null-topic update semantics; nullable composite upsert can duplicate rows.
+- [Student notes Realtime editor](student-notes-realtime-editor.md) — reconcile Realtime events in place; never use initial loading or accept stale-context results.

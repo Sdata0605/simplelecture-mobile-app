@@ -1,0 +1,25 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+# Supabase CLI temp state
+supabase/.temp/
+
+# EAS local credentials (never commit)
+mobile/android_keystore.jks
+mobile/credentials.json
+
+# Machine-local build state and signing material
+.config/
+mobile/.expo/
+mobile/.keystore_password.txt
+mobile/android_keystore*.jks*
+mobile/keystore_backup.zip
+mobile/upload_certificate_new.pem
+attached_assets/*keystore*
+attached_assets/*certificate*
+attached_assets/*password*
+attached_assets/GoogleService-Info_*.plist
+attached_assets/google-services_*.json

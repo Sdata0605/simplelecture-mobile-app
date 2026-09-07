@@ -1,0 +1,233 @@
+## Notes tab — full specification for the mobile app (Replit AI brief)
+
+Paste this to Replit AI to rebuild the same Notes tab on mobile. No code changes are proposed here — this is a spec only.
+
+---
+
+### 1. Purpose
+
+The Notes tab turns the AI-generated lecture (the same `presentation.json` used by the V3/V4 video player) into a **readable, printable study document** for a topic. It gives the student:
+
+- The lecture's narration text, section by section.
+- Extracted key points, definitions/formulas, and figures from that lecture.
+- A **"Important questions"** block per section (curated / marked).
+- A **"Practice questions"** block per section (from the Question Bank, or generated on demand).
+- Two rendering modes:
+  1. **Book Reader (default)** — a two-page spread that feels like a textbook.
+  2. **Legacy card list** — one card per section (fallback via `localStorage.setItem("notes.legacyReader","1")`).
+
+If the topic has no published AI lecture yet, Notes shows an empty state — never a fake/placeholder file.
+
+---
+
+### 2. Data source (single source of truth)
+
+All notes come from the exact same JSON the V3/V4 player uses. Nothing is fabricated.
+
+**Query pattern (`src/hooks/useTopicNotes.ts`):**
+1. `ai_assistant_documents` where `topic_id = <topicId>` → collect `id`s.
+2. `video_generation_jobs` where `document_id IN (...)` AND `is_published = true` AND `status = 'completed'`, order by `created_at DESC`, limit 1 → this is the published lecture job.
+3. Read `job.presentation_json.sections` — array of section objects.
+4. `questions` where `topic_id = <topicId>` (limit 500) → the Question Bank pool for that topic.
+
+**Section shape used by the UI:**
+```ts
+type NotesSection = {
+  section_id: string;            // stable id from JSON, else index+1
+  section_type?: string;         // "intro" | "concept" | "example" | ...
+  title: string;                 // section heading
+  narration?: {
+    full_text?: string;          // full narration for that section
+    segments?: { text?: string; purpose?: string; duration_seconds?: number }[];
+    total_duration_seconds?: number;
+  };
+  visual_beats?: {
+    visual_type?: string;        // "bullet" | "list" | "key_points" | "definition" | "formula" | "equation" | ...
+    display_text?: string | string[];
+    image_url?: string;          // figure / diagram
+    latex?: string;              // formula string
+    start_time?: number;
+    end_time?: number;
+  }[];
+  summary?: string;
+  key_points?: string[];
+};
+```
+
+**Question bucketing per section (important logic to replicate):**
+- If a question has `subtopic_id`, look up that subtopic's `title` and match it (case-insensitive substring, either direction) against section titles → put the question in that section.
+- Any unbucketed question is distributed **round-robin** across sections so every section has at least some questions.
+- Within a section:
+  - `is_important === true` → **Important questions** bucket.
+  - Everything else → **Practice questions** bucket, sorted so `is_verified` first.
+
+**Return payload used by both renderers:**
+```ts
+{
+  jobId, sourceUpdatedAt,
+  sections: NotesSection[],
+  questionsBySection: Record<sectionId, TopicNotesQuestion[]>,
+  allQuestions: TopicNotesQuestion[],
+  hasPublishedLecture: boolean
+}
+```
+
+---
+
+### 3. Empty / loading / error states
+
+- **Loading:** three tall skeleton cards.
+- **Error:** small card saying *"Couldn't load notes. Please try again."*
+- **No published lecture / no sections:** book icon + *"Notes not available yet — Notes appear once this topic has a published AI lecture."*
+
+---
+
+### 4. Book Reader (default UI, `NotesBookReader.tsx`)
+
+This is the primary experience. On mobile, replicate the same reading model with page swipe.
+
+**Layout (`useNotesResponsive` breakpoints):**
+- `mobile` (< 768px): one page at a time, swipe/tap L/R to turn.
+- `tablet` (768–1023px): one page at a time, larger typography.
+- `desktop` (≥ 1024px): two-page spread — left page + right page side by side.
+
+**Spread model (`buildSpreads`):**
+Each section becomes a spread:
+- **Left page = "intro"**
+  - Cleaned narration text (`cleanNarrationText`): strips SSML/HTML, collapses spaces but **preserves paragraph breaks**; if none exist, groups every ~2 sentences into a paragraph.
+  - Optional bulleted "Key points" derived from visual beats whose `visual_type` includes `"bullet"`, or equals `"list"` / `"key_points"`.
+  - `isFirstPage` flag for the very first spread (used for a decorative "Section 1" heading).
+- **Right page**
+  - **Callouts** from visual beats where `visual_type` is `"definition"` / `"formula"` / `"equation"`, rendered as bordered blocks with the type label. LaTeX supported via KaTeX.
+  - **Images**: any `visual_beats[].image_url`, lazy-loaded, `object-contain` on a muted background.
+  - **Important questions** (max 2 per spread): collapsible, styled amber, `Star` icon.
+  - **Practice questions** (max 3 per spread): collapsible, neutral, `FileQuestion` icon.
+
+**Navigation controls:**
+- Prev / Next arrow buttons (disabled at ends).
+- Keyboard: Left/Right arrows.
+- Page indicator: `X / N`.
+- "Table of contents" button opens a Sheet listing every section title; tapping one jumps to that spread.
+- "Print" button → `window.print()` (print CSS below).
+
+**Typography and feel:**
+- Serif or textbook-style body font, larger line-height (`leading-relaxed`).
+- Paragraphs are `<p>`; markdown/GFM/math via `react-markdown` + `remark-gfm` + `remark-math` + `rehype-katex`.
+- Speech tokens (`<break/>`, SSML tags) always stripped before render.
+
+---
+
+### 5. Legacy card list (fallback, `NotesTab.tsx`)
+
+Activated only when `localStorage.notes.legacyReader === "1"`. Same content, different chrome:
+- Sticky header (topic title + section count + Print).
+- Quick-jump chips (anchor to `#note-<sectionId>`).
+- One `Card` per section:
+  - Numbered title + optional `section_type` badge.
+  - Cleaned narration paragraph.
+  - "Key points" bullet list.
+  - Callouts (definitions / formulas / equations) as left-bordered blocks.
+  - Figures grid.
+  - **Important questions** — collapsible, `defaultOpen`, amber-styled.
+  - **Practice questions** — collapsible, closed by default. If fewer than 3 exist, show a *"Generate practice questions"* button (see §7).
+
+Both renderers use the exact same `QuestionPreview` semantics (see §6).
+
+---
+
+### 6. `QuestionPreview` component
+
+Rendered inside Important and Practice collapsibles.
+
+- Question text via `toDisplayString(q.question_text)` + ReactMarkdown + KaTeX.
+- If options exist, normalize with `normalizeOptions(q.options)` → shows `A. option`, `B. option`, …
+- Meta chips: `difficulty` (capitalized outline badge) and `AI` badge if `is_ai_generated`.
+- **Show / Hide answer** toggle: reveals `correct_answer` and `explanation` (markdown + KaTeX). No auto-reveal.
+
+Important questions get an amber border to visually stand out from practice ones.
+
+---
+
+### 7. "Generate practice questions" flow (optional server call)
+
+Only triggered from the legacy card list when a section has fewer than 3 questions. Invokes a Supabase edge function:
+
+```ts
+supabase.functions.invoke("generate-topic-notes-questions", {
+  body: {
+    topic_id, chapter_id, subject_id,
+    section_id, section_title,
+    section_text: section.narration.full_text || segments.map(s=>s.text).join(" "),
+    key_points: (visual_beats display_text, capped to 20),
+    count: 5
+  }
+})
+```
+
+On success:
+- Toast: *"Practice questions ready — N questions added to the Question Bank."*
+- Invalidate `["topic-notes", topicId]` to refetch.
+
+On failure: destructive toast with the error message. Button shows a spinner while `generatingFor === section.section_id`.
+
+Mobile app can call the same edge function verbatim.
+
+---
+
+### 8. Rendering rules (must-match)
+
+- **Markdown pipeline:** `react-markdown` + `remark-gfm` + `remark-math` + `rehype-katex`. Do NOT ship a custom Markdown renderer.
+- **Sanitization:** Always strip SSML/HTML tags from narration before rendering (`stripSpeech` / `cleanNarrationText`).
+- **Math:** LaTeX must render via KaTeX; do not print raw `$…$` to the user.
+- **Images:** `loading="lazy"`, `object-contain`, muted background — never let a diagram get cropped.
+- **Print CSS (legacy list):** `.print:hidden` elements are hidden; closed collapsibles are forced open so the printed doc contains everything.
+
+---
+
+### 9. Accessibility & UX
+
+- Every interactive control (page arrows, Show answer, ToC entries, Generate button) is keyboard reachable and has an aria label.
+- Collapsibles use Radix so screen readers announce open/closed state.
+- Page arrows have `disabled` states at the ends; ToC entries are `<button>`s inside a Sheet.
+- Long section titles never wrap the header — truncate with ellipsis on mobile.
+
+---
+
+### 10. Caching / performance
+
+- `useTopicNotes` uses TanStack Query, `staleTime: 5 min`, `retry: 2`.
+- The topic's questions query is capped at 500 rows.
+- `questionsBySection` is computed once per fetch; renderers only slice arrays.
+- Book Reader recomputes spreads with `useMemo` on `sections`/`questionsBySection` change.
+
+Mobile app should cache the same payload per `topicId` and invalidate on lecture republish (or on pull-to-refresh).
+
+---
+
+### 11. What to build on mobile — checklist for Replit AI
+
+- [ ] Topic-scoped Notes screen that fetches the latest published lecture the same way as `useTopicNotes` (queries above).
+- [ ] Book Reader with one-page-at-a-time swipe on phones; two-page spread on tablets in landscape / large screens.
+- [ ] Section builder that produces `{ intro, bullets, callouts, images, importantQuestions, practiceQuestions }` per section using the exact same rules (visual_type filters, subtopic-title fuzzy match, round-robin fallback, verified-first sort, is_important separation, caps: 2 important + 3 practice per spread).
+- [ ] Narration cleaner that strips SSML/HTML and preserves paragraph breaks (fall back to 2-sentence grouping).
+- [ ] Markdown + LaTeX rendering (KaTeX or platform equivalent).
+- [ ] Collapsible Important & Practice question sections with a per-question "Show/Hide answer" toggle showing answer + explanation.
+- [ ] Table of contents drawer, page indicator (`X / N`), prev/next controls.
+- [ ] "Print / Export" affordance (share sheet on mobile is acceptable).
+- [ ] Empty state when `hasPublishedLecture === false` or `sections.length === 0`.
+- [ ] Loading skeletons; error state with retry.
+- [ ] Optional: call `generate-topic-notes-questions` edge function when a section has < 3 practice questions.
+- [ ] Do NOT fabricate content — if `presentation_json.sections` is empty, show the empty state.
+
+---
+
+### 12. File pointers (for parity checks)
+
+- Hook / data assembly: `src/hooks/useTopicNotes.ts`
+- Book Reader UI: `src/components/learning/notes/NotesBookReader.tsx`
+- Legacy card list + QuestionPreview + generate-questions flow: `src/components/learning/notes/NotesTab.tsx`
+- Responsive layout hook: `src/components/learning/notes/useNotesResponsive.ts`
+- Reader toggle: `src/lib/notesBookPilot.ts` (default = book reader; `localStorage.notes.legacyReader = "1"` reverts to cards)
+- Backend source: `video_generation_jobs.presentation_json` (published + completed) joined via `ai_assistant_documents.topic_id`.
+
+Approve this and I can also save the same content into a `NOTES_MOBILE_SPEC.md` file inside the repo so you can share it directly.

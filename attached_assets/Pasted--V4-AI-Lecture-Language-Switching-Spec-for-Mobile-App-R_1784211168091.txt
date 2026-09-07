@@ -1,0 +1,232 @@
+# V4 AI Lecture — Language Switching Spec for Mobile App (Replit)
+
+How the section-wise AI lecture player (V4) switches avatar language (English ↔ Kannada / Hindi / Tamil / Telugu / Malayalam) so the Replit mobile app can replicate it.
+
+> This is a **different player** from the marketing hero. The hero is a single pre-merged MP4. V4 plays a lecture **section by section**, and each section has its own avatar video per language. Language is switched *inside* the lecture — no reopen, no reload.
+
+---
+
+## 1. Data source — `presentation.json`
+
+Every lecture job publishes:
+
+```
+https://server1.simplelecture.com/video/<external_job_id>/presentation.json
+```
+
+Fetch with `cache: 'no-store'`. This is the **single source of truth**. Shape (only fields you need):
+
+```jsonc
+{
+  "final_video_path": "final/merged.mp4",              // English merged (optional)
+  "vimeo_mp4_url": "https://player.vimeo.com/...mp4",  // English merged Vimeo mirror
+
+  // Per-language merged fallbacks at ROOT (optional):
+  "kannada_final_video": "final/kannada_merged.mp4",
+  "kannada_vimeo_mp4_url": "https://player.vimeo.com/.../kannada.mp4",
+  "hindi_final_video": "...",
+  "hindi_vimeo_mp4_url": "...",
+
+  "sections": [
+    {
+      "section_id": 0,
+      "section_type": "content",                        // or intro | summary | quiz | memory
+      "avatar_video": "avatars/section_0_avatar.mp4",   // default = English
+
+      "avatar_languages": [
+        {
+          "language": "kannada",
+          "status": "completed",                        // must be completed|ready|success
+          "video_path": "avatars/kannada/section_0_avatar.mp4",
+          "video_url":  "https://... durable optional",
+          "b2_url":     "https://f004.backblazeb2.com/... optional",
+          "vimeo_url":  "https://player.vimeo.com/.../kannada_s0.mp4"
+        },
+        { "language": "hindi", "status": "completed", "video_path": "..." }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## 2. Which languages should the switcher show?
+
+**STRICT full-coverage rule** (matches `useAvailableLanguages.ts`):
+
+> Offer a language ONLY if every section has a completed avatar for it.
+
+Algorithm:
+
+1. English is always available.
+2. For each non-English language `L`, count sections where `avatar_languages` has an entry with `language == L` AND `status ∈ {completed, ready, success}` AND at least one usable URL.
+3. If `count == sections.length` → show `L`. Otherwise hide it.
+
+Supported codes (lowercase): `english, hindi, kannada, tamil, telugu, malayalam`.
+
+Do **not** trust the DB copy — use the live CDN `presentation.json` only.
+
+---
+
+## 3. Resolving the avatar URL for a section + language
+
+```text
+if language == "english":
+    return getMediaSrc(section.avatar_video, jobId)
+
+for a in section.avatar_languages:
+    if a.language == language AND a.status in {completed, ready, success}:
+        pick first non-empty of:
+            a.video_url, a.b2_url, a.vimeo_url,
+            a.video_path (relative → resolve via CDN)
+        return that URL
+
+# language not ready for this section → fall back to English
+return getMediaSrc(section.avatar_video, jobId)
+```
+
+**`getMediaSrc` rule:**
+
+- Absolute URL (`http://`, `https://`, `blob:`) → use as-is.
+- Relative path → `https://server1.simplelecture.com/video/<jobId>/<path>`.
+
+Priority for a matched language entry: `video_url` > `b2_url` > `vimeo_url` > CDN-resolved `video_path`.
+
+---
+
+## 4. What happens when the user picks Kannada
+
+1. Store `language = "kannada"` in state.
+2. Resolve current section's Kannada avatar URL via §3, swap the `<video>` / AVPlayer / ExoPlayer source, autoplay from 0.
+3. **Force avatar-only mode when language ≠ english:**
+   - Skip merged/composited `final_video_path`.
+   - Skip client-side beat-video overlays.
+   - Play the language avatar MP4 straight through.
+4. On next/previous section navigation, resolve again with the same `language`.
+5. Switch back to English → resume normal V4 rules (final composite when present; avatar for intro/summary/quiz).
+
+**Why avatar-only for non-English:** beat overlays are timed to the English narration. Playing them over Kannada audio de-syncs. The pre-rendered Kannada avatar already has the correct audio + subtitles baked in.
+
+---
+
+## 5. Optional shortcut — single-file merged per language
+
+Some jobs also publish a pre-merged non-English file at the presentation root:
+
+```json
+"kannada_vimeo_mp4_url": "https://player.vimeo.com/.../kannada_full.mp4",
+"kannada_final_video":  "final/kannada_merged.mp4"
+```
+
+Detection (mirrors `getMergedVideoForLanguage`):
+
+```text
+url  = lang=="english" ? p.vimeo_mp4_url : p[lang+"_vimeo_mp4_url"]
+path = lang=="english" ? p.final_video_path : p[lang+"_final_video"]
+```
+
+If `url` or `path` exists for the chosen language, mobile **may** skip section-wise playback and play the single merged MP4 (same setup as the marketing hero). Prefer `url` over `path`. If neither exists → fall back to §4 section-wise.
+
+---
+
+## 6. End-to-end mobile flow
+
+1. Open a lecture — `external_job_id` known.
+2. GET `presentation.json`.
+3. Compute available languages via §2.
+4. Show a language chip row / dropdown (e.g. `English • Kannada • Hindi`). Default `english`.
+5. Player starts playing English avatars section by section.
+6. User taps **Kannada** →
+   - `language = "kannada"`
+   - Swap current section src to Kannada avatar URL (§3). Keep section index. Autoplay from 0.
+   - Preload next section in Kannada too.
+7. On section advance: re-resolve via §3 with the current language.
+8. Defensive fallback: if a specific section is missing Kannada (shouldn't happen thanks to §2), play the English avatar for that section only.
+
+---
+
+## 7. Language topup gating (business rule)
+
+Non-English is a paid add-on on web. Mobile should mirror this:
+
+```sql
+select selected_languages
+from language_topup_purchases
+where user_id = :uid and course_id = :courseId and status = 'success'
+limit 1;
+```
+
+- `selected_languages` (string[]) lists unlocked languages.
+- Languages NOT in the list → show a lock icon in the switcher; tapping opens the topup purchase flow.
+- English is always free.
+- If the mobile app is only used by already-purchased users, this check can be skipped.
+
+---
+
+## 8. Native player settings for the avatar MP4
+
+Same as the marketing hero:
+
+- Progressive MP4 via native `<video>` (WebView) / `AVPlayerViewController` + `AVURLAsset` (iOS) / `ExoPlayer` + `ProgressiveMediaSource` (Android).
+- `playsInline`, autoplay, `controlsList="nodownload noremoteplayback"`, `disablePictureInPicture`.
+- `object-fit: contain`, black background.
+- **No** HLS, **no** Vimeo iframe.
+
+When a section ends → advance and load the next avatar URL. No page reload, no player teardown.
+
+---
+
+## 9. Endpoint contract
+
+Everything comes from ONE file:
+
+```
+GET https://server1.simplelecture.com/video/<external_job_id>/presentation.json
+```
+
+No auth. Cache-bust with `cache: 'no-store'` (or `?t=<ts>`). From this file the app derives: sections, English avatars, per-language avatars, merged single-file fallbacks, and the available-language set.
+
+---
+
+## 10. Do / Don't
+
+**Do**
+
+- Fetch live CDN `presentation.json`.
+- Enforce strict full-coverage rule for the switcher.
+- Force avatar-only playback when language ≠ english.
+- Prefer durable URLs (`video_url` > `b2_url` > `vimeo_url` > CDN-resolved `video_path`).
+- Offer single-file merged playback if `<lang>_vimeo_mp4_url` exists.
+
+**Don't**
+
+- Don't trust the DB copy of `presentation_json`.
+- Don't show a language with incomplete coverage.
+- Don't overlay client-side beat videos on non-English avatars.
+- Don't use Vimeo's iframe player (403 in WebView / native).
+- Don't hardcode language URLs.
+
+---
+
+## 11. Web reference code (for parity)
+
+- Language availability: `src/hooks/useAvailableLanguages.ts`
+- Per-section URL resolution: `getAvatarUrl`, `getPrimarySectionAssets`, `getMediaSrc` in `src/components/learning/v4/utils.ts`
+- Merged fallback per language: `getMergedVideoForLanguage` (same file)
+- Player entry: `src/components/learning/v4/V4Player.tsx` — see `language` state, `previousLanguageRef`, and the reload-on-language-change effect
+- Topup: `src/hooks/useLanguageTopup.ts`
+
+---
+
+## 12. Deliverables for Replit
+
+1. `fetchPresentation(jobId)` — GET CDN URL, cache-bust.
+2. `getAvailableLanguages(presentation)` — apply §2.
+3. `LanguageSwitcher` UI — chips/dropdown, default English, gated by topup (§7).
+4. `resolveAvatarUrl(section, language, jobId)` — §3 logic.
+5. On language change: keep section index, swap video src, autoplay from 0.
+6. On section change: re-resolve URL with current language.
+7. Optional: single-file merged mode when `<lang>_vimeo_mp4_url` exists.
+
+No web-side code changes required — this plan is a spec handoff to the mobile team.

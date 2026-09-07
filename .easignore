@@ -1,0 +1,48 @@
+# EAS archives from the workspace root (a root package.json makes EAS treat this
+# as a monorepo), so mobile/.easignore is never read. This root .easignore keeps
+# the upload archive small by excluding everything the mobile EAS build does not
+# need. Only the mobile/ source is required.
+
+# Heavy / irrelevant root directories (web app, tooling, caches, VCS)
+node_modules
+.git
+.local
+.agents
+attached_assets
+.config
+.cache
+.upm
+client
+server
+shared
+public
+supabase
+script
+scripts
+dist
+
+# Web-app config files at root (not needed for the mobile native build)
+vite.config.ts
+vite-plugin-meta-images.ts
+postcss.config.js
+drizzle.config.ts
+components.json
+
+# Mobile build artifacts / large non-build assets
+mobile/android/.gradle
+mobile/android/build
+mobile/android/app/build
+mobile/ios/build
+mobile/ios/Pods
+mobile/ios/DerivedData
+mobile/.expo
+mobile/store-assets
+mobile/dist
+mobile/supabase-functions
+mobile/supabase-migrations
+mobile/__tests__
+mobile/coverage
+mobile/scripts
+
+# Logs / locks
+*.log

@@ -1,0 +1,218 @@
+The implementation is not yet accepted. Your completion report reveals two unresolved problems and several unproven requirements.
+
+Create a checkpoint before making any additional change. Do not modify Supabase, backend configuration, authentication, enrolment, database data, Edge Functions, or unrelated screens.
+
+## 1. Remove all learner-facing AILecturePlayer fallbacks
+
+You stated that CoursePreviewScreen still contains two AILecturePlayer fallbacks for content without external_job_id.
+
+This violates the V4-only requirement.
+
+For learner-facing AI lecture flows:
+
+* Do not navigate to AILecturePlayer.
+* Do not navigate to V3Player.
+* Do not use video_url.
+* Do not parse a job ID from video_url.
+* Do not derive presentation.json from video_url.
+* Do not silently fall back to a legacy player.
+
+When a selected AI lecture has no valid external_job_id, display:
+
+```text
+Content unavailable
+This lecture is not available in the new player yet.
+```
+
+Provide retry/back navigation as appropriate.
+
+Legacy player screens may remain registered for unrelated historical features, but they must be unreachable from:
+
+* CoursePreviewScreen AI lecture playback;
+* TopicDetailsScreen AI lecture playback;
+* enrolled-course AI lecture playback;
+* free/marketing AI lecture playback.
+
+## 2. Prove the actual V4 proxy value
+
+Open `src/services/v4PlayerService.ts` and verify the actual code—not only the comment.
+
+It must use:
+
+```typescript
+const PROXY_BASE =
+  `${SUPABASE_URL}/functions/v1/v4-player-proxy`;
+```
+
+The presentation request must become:
+
+```text
+/functions/v1/v4-player-proxy/player/jobs/{jobId}/presentation.json?t={timestamp}
+```
+
+There must be no V4 presentation request through `v3-player-proxy`.
+
+## 3. Use the top-level language MP4 URLs as the actual player source
+
+The language selector must change the full lecture video source.
+
+Use:
+
+```typescript
+const activeVideoUrl =
+  resolvePlaybackUrl(presentation, selectedLanguage).url;
+```
+
+The actual native video component’s source must be derived from `activeVideoUrl`.
+
+English:
+
+```typescript
+presentation.vimeo_mp4_url
+```
+
+Kannada:
+
+```typescript
+presentation.kannada_vimeo_mp4_url
+```
+
+Passing language only to `resolveAvatarPath` is not sufficient. That controls section-level avatar media and does not prove that the top-level merged lecture video changes.
+
+When language changes:
+
+1. Pause/unload the current source.
+2. Resolve the selected language URL.
+3. Replace the real native player source.
+4. Load the new source.
+5. Keep exactly one player instance.
+6. Prevent overlapping audio.
+7. Preserve progress only if existing architecture safely supports it.
+8. If the selected language is unavailable, show a clear unavailable state.
+9. Never fall back to V3.
+
+Keep section-level `avatar_languages` support separately where needed.
+
+## 4. Verify CoursePreviewScreen uses the complete shared flow
+
+CoursePreviewScreen must explicitly use the shared service for:
+
+```text
+course_free_access_chapters
+video_generation_jobs
+topic_lecture_visibility
+external_job_id
+```
+
+Confirm the actual flow:
+
+```text
+selected course
+→ get free chapter IDs
+→ confirm selected chapter is free
+→ get published/completed topic lectures
+→ fetch topic visibility mode
+→ filter lectures
+→ choose visible lecture
+→ read external_job_id
+→ navigate to V4Player
+```
+
+A non-free chapter must remain locked for visitor/unpaid users.
+
+A free chapter must not require purchase.
+
+Preserve the app’s existing login/navigation policy; do not redesign authentication.
+
+## 5. Verify TopicDetailsScreen uses the same resolver
+
+TopicDetailsScreen must use the same shared lecture-resolution logic as CoursePreviewScreen.
+
+It must not independently implement conflicting visibility rules.
+
+Before navigation, verify:
+
+```typescript
+lecture.external_job_id
+```
+
+Then route directly to V4Player.
+
+If it is absent, show content unavailable.
+
+## 6. Show direct code evidence
+
+At completion, show the relevant final code snippets from:
+
+* `src/services/v4PlayerService.ts`
+* `src/screens/CoursePreviewScreen.tsx`
+* `src/screens/TopicDetailsScreen.tsx`
+* `src/screens/V4PlayerScreen.tsx`
+* `src/services/aiLectureService.ts`
+* the V4 navigation parameter type
+
+Do not provide only a summary.
+
+## 7. Run verification searches
+
+Run:
+
+```bash
+grep -RIn \
+  --exclude-dir=node_modules \
+  --exclude-dir=.git \
+  --exclude-dir=dist \
+  --exclude-dir=.expo \
+  -E "v3-player-proxy|player_v2|navigate\\(['\"]AILecturePlayer|navigate\\(['\"]V3Player|video_url|extractJobIdFromUrl|shouldUseV4Player|DPHARMACY_COURSE_ID|v4-player-proxy|external_job_id|topic_lecture_visibility|course_free_access_chapters|resolvePlaybackUrl|vimeo_mp4_url|kannada_vimeo_mp4_url" \
+  src
+```
+
+Explain every remaining result involving:
+
+* v3-player-proxy;
+* player_v2;
+* video_url;
+* AILecturePlayer;
+* V3Player;
+* DPHARMACY_COURSE_ID.
+
+Do not label a remaining target-flow fallback “legitimate.” It is not permitted.
+
+## 8. Run tests
+
+Run the complete Jest suite, not only playerSelection.test.ts:
+
+```bash
+npm test -- --runInBand
+```
+
+Run:
+
+```bash
+npx tsc --noEmit
+```
+
+Clearly separate:
+
+* new errors;
+* errors in modified files;
+* unrelated pre-existing errors.
+
+## 9. Required completion proof
+
+Provide:
+
+1. Exact files modified in this correction.
+2. Proof that no preview/topic AI lecture path navigates to AILecturePlayer or V3Player.
+3. Proof that missing external_job_id shows unavailable instead of legacy fallback.
+4. Actual PROXY_BASE code.
+5. Actual native video source expression.
+6. Proof English resolves to vimeo_mp4_url.
+7. Proof Kannada resolves to kannada_vimeo_mp4_url.
+8. Proof CoursePreview uses free chapter and visibility services.
+9. Full Jest result.
+10. TypeScript result.
+11. Any runtime check completed.
+12. Whether it is ready for an independent read-only Codex audit.
+
+Do not claim completion until these requirements are met.

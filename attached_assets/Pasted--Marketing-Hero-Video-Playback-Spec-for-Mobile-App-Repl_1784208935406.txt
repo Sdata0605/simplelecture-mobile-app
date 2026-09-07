@@ -1,0 +1,165 @@
+
+# Marketing Hero Video — Playback Spec for Mobile App (Replit)
+
+This document explains exactly how the "marketing lecture" on the homepage hero plays in the web app today, so the mobile app can play it **the same way** — no V4 chrome, no Vimeo iframe, no subtitles, no branding, just a plain video with native controls.
+
+Important: this is a **different player** from the section-wise AI lecture player (V4 / EducationalVideoPlayer). The marketing/hero lecture is a **single pre-merged MP4** — no sections, no beat videos, no avatar layers, no subtitle timing, no presentation.json fetching required at runtime.
+
+---
+
+## 1. What is actually being played
+
+A single **progressive MP4** file hosted on Vimeo's CDN (signed URL). It's the *final merged* rendition of a lecture — everything (avatar + beats + text + audio) is already baked into one file.
+
+Source of truth (web): `src/lib/homepageHeroLecture.ts`
+
+```ts
+export const HOMEPAGE_HERO_LECTURE = {
+  jobId: "SocialScience_20260630115302591_5462fd6a",
+  vimeoId: "1205802274",
+  videoMp4Url:
+    "https://player.vimeo.com/progressive_redirect/playback/1205802274/rendition/720p/file.mp4%20%28720p%29.mp4?loc=external&oauth2_token_id=1806524992&signature=58cc606332ec40e26eee1fd34d8c57a5e5354f8eb83b4696201fbe31d45ee9f8",
+  title: "Discovery of a New Sea Route to India",
+  subtitle: "SSLC 10 — Social Science • Chapter 1 (Topic 1.3)",
+  player: "v4",
+};
+```
+
+The `videoMp4Url` is a **Vimeo progressive_redirect signed URL** (`player.vimeo.com/progressive_redirect/playback/{vimeoId}/rendition/720p/...&signature=...`). The signature is long-lived but not permanent — the mobile app should ideally fetch this URL from your backend (see §4) rather than hardcode it.
+
+Why MP4 and not Vimeo's iframe embed:
+- The Vimeo iframe embed is **domain-restricted** — it returns 403 on any origin that isn't whitelisted (native WebViews, `capacitor://localhost`, `file://`, etc. all fail).
+- The progressive MP4 URL is **not domain-locked** and plays in any HTML5 `<video>` element or native player (ExoPlayer / AVPlayer).
+- No Vimeo logo, share, like, or watermark — clean unbranded playback.
+
+---
+
+## 2. How the web app plays it (the "marketing player")
+
+Component: `src/components/learning/v4/VimeoDirectPlayer.tsx`
+
+Reached via this branch in `V4Player.tsx` (lines ~573–602):
+
+```ts
+const isVimeoUrl = !!mergedForLang.url && /(^|\.)vimeo\.com\//i.test(mergedForLang.url);
+if (isVimeoUrl) {
+  return <VimeoDirectPlayer videoUrl={mergedForLang.url} ... />;
+}
+```
+
+Rule: **if the merged-video URL is a `vimeo.com` URL, we bypass V4's section engine entirely and render a plain `<video>`.** Otherwise (server1/B2 path) we use `V4MergedPlayer`.
+
+The actual playback element is trivial:
+
+```tsx
+<video
+  src={videoUrl}
+  controls
+  controlsList="nodownload noremoteplayback"
+  disablePictureInPicture
+  playsInline
+  autoPlay
+  style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
+/>
+```
+
+That's it. No HLS, no DASH, no custom controls. Everything else in `VimeoDirectPlayer.tsx` is optional chrome:
+- Close button (✕)
+- Title bar
+- Language switcher (only if >1 language available — not used for the current hero)
+- Fullscreen toggle
+- Watch-time delta tracker (for completion analytics — optional on mobile)
+- Completion dialog + chapter-test-ready dialog (optional on mobile)
+
+---
+
+## 3. What the mobile app needs to replicate
+
+### Minimum viable (just play the video)
+
+Native player with these settings:
+
+| Setting | Value | Why |
+|---|---|---|
+| Source | `videoMp4Url` (the Vimeo progressive MP4) | Direct progressive download, no HLS |
+| Controls | Native controls visible | Same UX as web |
+| `playsInline` | true | iOS: don't auto-fullscreen |
+| Autoplay | true (muted-first if platform blocks unmuted autoplay) | Match web |
+| Download disabled | true | `controlsList="nodownload"` on web, equivalent on native |
+| PiP | disabled | Match web |
+| AirPlay/Remote playback | disabled | Match web (`noremoteplayback`) |
+| Object-fit | contain, black background | Match web |
+
+**Android (Capacitor / native):** use `ExoPlayer` with a `ProgressiveMediaSource` from the MP4 URL. Do **not** use `HlsMediaSource` — the URL is not HLS.
+
+**iOS (Capacitor / native):** use `AVPlayer` with `AVURLAsset(url:)` pointing at the MP4 URL. Set `allowsExternalPlayback = false` and `preventsDisplaySleepDuringVideoPlayback = true`. Present in an `AVPlayerViewController` (its native controls match the web look).
+
+**WebView fallback (if Replit is just wrapping the web app):** the existing `VimeoDirectPlayer` already works inside a WebView — no changes needed. But make sure the WebView allows:
+- Mixed content off (URL is https)
+- Media autoplay without user gesture: `webView.settings.mediaPlaybackRequiresUserGesture = false` on Android; `WKWebViewConfiguration.mediaTypesRequiringUserActionForPlayback = []` on iOS
+- Inline playback: `WKWebViewConfiguration.allowsInlineMediaPlayback = true` on iOS
+
+### Full parity (with title bar, close, analytics)
+
+Wrap the native player in a screen that shows:
+1. Top bar: **✕ close button** (left) + **title text** (center) — pulls `title` and `subtitle` from the same config
+2. Full-screen video area (black background, `object-fit: contain`)
+3. Optional: log `watchTimeDelta` to your backend every `timeupdate` (same as `useVideoCompletionTracker` — send `delta` seconds where `0 < delta < 5` to filter out seeks)
+
+---
+
+## 4. Where the URL should come from on mobile
+
+Do **not** hardcode `videoMp4Url` into the mobile app binary — the Vimeo signature can rotate.
+
+Recommended: expose a tiny backend endpoint (or Supabase table row) that returns the same object as `HOMEPAGE_HERO_LECTURE`. The mobile app fetches it on launch.
+
+Two options:
+
+**Option A — Reuse the existing config file via a small edge function.** Create `supabase/functions/get-hero-lecture/index.ts` that returns the `HOMEPAGE_HERO_LECTURE` JSON. Mobile app hits `${SUPABASE_URL}/functions/v1/get-hero-lecture` and uses `videoMp4Url`.
+
+**Option B — Store it in a Supabase table** (`hero_lecture_config` with one row) with columns `job_id`, `vimeo_id`, `video_mp4_url`, `title`, `subtitle`. Mobile app reads the row via Supabase JS SDK.
+
+Either way, the mobile app treats `video_mp4_url` as opaque — just feeds it to the native player.
+
+---
+
+## 5. What the mobile app should NOT do
+
+- ❌ Do **not** load Vimeo's iframe (`https://player.vimeo.com/video/{id}`) — 403 in WebView / native.
+- ❌ Do **not** try to fetch/parse `presentation.json` for the hero video — it's not needed. The hero is a single MP4.
+- ❌ Do **not** call the V4 avatar / beat-video pipeline for the hero — that's for the section-wise AI lecture player, a different flow.
+- ❌ Do **not** use HLS libraries (hls.js, ExoPlayer HlsMediaSource) — the URL is progressive MP4.
+- ❌ Do **not** proxy the URL through a Cloudflare worker — Vimeo's CDN already handles bandwidth; proxying breaks range requests / seeking.
+
+---
+
+## 6. Summary — the exact contract
+
+| Item | Value |
+|---|---|
+| Marketing video URL (current) | `https://player.vimeo.com/progressive_redirect/playback/1205802274/rendition/720p/file.mp4%20%28720p%29.mp4?loc=external&oauth2_token_id=1806524992&signature=58cc606332ec40e26eee1fd34d8c57a5e5354f8eb83b4696201fbe31d45ee9f8` |
+| Format | Progressive MP4 (720p, H.264 + AAC) |
+| Protocol | HTTPS with range requests |
+| DRM | None |
+| Auth | None (signature in URL) |
+| Player | Native `<video>` / `AVPlayer` / `ExoPlayer` — nothing custom |
+| Controls | Native, with download/PiP/AirPlay disabled |
+| Autoplay | Yes (muted-first if platform requires) |
+| Title | "Discovery of a New Sea Route to India" |
+| Subtitle | "SSLC 10 — Social Science • Chapter 1 (Topic 1.3)" |
+| Source of truth | `src/lib/homepageHeroLecture.ts` (web) — mirror via edge function or table for mobile |
+
+That's the entire playback contract. Any HTML5-video-capable player with the settings in §3 will play it identically to the web hero.
+
+---
+
+## Deliverables for Replit (mobile side)
+
+1. Add a fetch on app launch for the hero-lecture config (edge function or table row).
+2. Add a `MarketingLecturePlayerScreen` that takes `{ videoMp4Url, title, subtitle, onClose }`.
+3. On Android, use ExoPlayer with `ProgressiveMediaSource`; on iOS, use `AVPlayerViewController` with `AVURLAsset`.
+4. Apply the settings table in §3 verbatim.
+5. Optional: POST watch-time deltas to the existing web analytics endpoint used by `useVideoCompletionTracker`.
+
+No web-side code changes are required for this task — this plan is a spec handoff.

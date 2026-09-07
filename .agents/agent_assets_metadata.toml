@@ -1,0 +1,205 @@
+uploads = []
+
+[[generated]]
+id = "C689L1rWA-VyHx0HRXjHZ"
+uri = "file://mobile/assets/students_studying_real.png"
+type = "image"
+title = "real students studying banner"
+
+[[outputs]]
+id = "VowUK_T1Q5omU5m5vfp0S"
+uri = "file://attached_assets/play_store_assets.zip"
+type = "unspecified"
+title = "Play Store Assets — Simple Lecture"
+
+[[outputs]]
+id = "a-Y7iKJ09bDTFVQLyxray"
+uri = "file://mobile/store-assets/icon-512.png"
+type = "image"
+title = "App Icon — 512×512 (Play Store)"
+
+[[outputs]]
+id = "FayupbOamsu0u3D3YHXiU"
+uri = "file://mobile/store-assets/feature-graphic-1024x500.png"
+type = "image"
+title = "Feature Graphic — 1024×500 (Play Store)"
+
+[[outputs]]
+id = "X9UxhXRm6e58b5iCnFMQj"
+uri = "file://mobile/store-assets/screenshots/screenshot-01-home-courses.png"
+type = "image"
+title = "1 – Home: Discover Top Courses"
+
+[[outputs]]
+id = "O0z4cVGcUNkUU8ZpcGnVh"
+uri = "file://mobile/store-assets/screenshots/screenshot-02-dashboard.png"
+type = "image"
+title = "2 – Dashboard: Track Your Learning Journey"
+
+[[outputs]]
+id = "z0QQ1cIxvAsv98nJzzjdw"
+uri = "file://mobile/store-assets/screenshots/screenshot-03-forum.png"
+type = "image"
+title = "3 – Forum: Ask, Discuss and Learn Together"
+
+[[outputs]]
+id = "8Dg1oQmzaqWxhP28L-Rse"
+uri = "file://mobile/store-assets/screenshots/screenshot-04-my-courses.png"
+type = "image"
+title = "4 – My Courses: All Your Courses in One Place"
+
+[[outputs]]
+id = "aIi0XzMa7sUsIGSuaFLqw"
+uri = "file://mobile/store-assets/screenshots/screenshot-05-ai-lecture.png"
+type = "image"
+title = "5 – AI Lecture: AI-Powered Video Lectures"
+
+[[outputs]]
+id = "CVdKxGhfx-7vmdNQ9pVMm"
+uri = "file://mobile/store-assets/screenshots/screenshot-06-ai-teacher.png"
+type = "image"
+title = "6 – AI Teacher: Your Personal AI Teacher"
+
+[[outputs]]
+id = "HQo_JTADwAj_iI8si8_jA"
+uri = "file://mobile/store-assets/screenshots/screenshot-07-quiz.png"
+type = "image"
+title = "7 – Quiz: Smart Quizzes and Assessments"
+
+[[outputs]]
+id = "pxBRZwgsD5qRU1mrO7_Bl"
+uri = "file://mobile/store-assets/screenshots/screenshot-08-assignment.png"
+type = "image"
+title = "8 – Assignment: Practice Assignments"
+
+[[outputs]]
+id = "iOVzK03JTM5ytiHmqVzRQ"
+uri = "file://mobile/store-assets/screenshots/screenshot-09-dpp.png"
+type = "image"
+title = "9 – DPP: Daily Practice Problems"
+
+[[outputs]]
+id = "5FGGqYqm5tmhEHwg3dbtn"
+uri = "file://mobile/store-assets/screenshots/screenshot-10-pyqs.png"
+type = "image"
+title = "10 – PYQs: Previous Year Questions"
+
+[[outputs]]
+id = "H3d5niplV1F0g4nbJ8dxk"
+uri = "file://mobile/store-assets/screenshots/screenshot-11-results.png"
+type = "image"
+title = "11 – Results: Review Your Test Results"
+
+[[outputs]]
+id = "1MbJw2TQWI3wki9IQsGKo"
+uri = "file://mobile/store-assets/screenshots/screenshot-12-doubts.png"
+type = "image"
+title = "12 – Doubts: Get Instant Doubt Support"
+
+[[outputs]]
+id = "4cuWqaukMjgTi06Oh_zkP"
+uri = "file://mobile/store-assets/screenshots/screenshot-13-explore.png"
+type = "image"
+title = "13 – Explore: Explore Courses for Every Goal"
+
+[[outputs]]
+id = "U_uZ4tmkYjA_4p0nI9DkR"
+uri = "file://mobile/store-assets/screenshots/screenshot-14-rewards.png"
+type = "image"
+title = "14 – Rewards: Earn Badges and Certificates"
+
+[[outputs]]
+id = "_sSX1ZPjXYOlN5D7nmWQ7"
+uri = "file://mobile/store-assets/feature-graphic-banner.png"
+type = "image"
+title = "Feature Graphic Banner — 1024×500 (Play Store)"
+
+[[outputs]]
+id = "ev-QSjBGb2LDXWJxky_8O"
+uri = "file://mobile/store-assets/phone-screenshots/phone-01-quiz.png"
+type = "image"
+title = "1 – Smart Quizzes and Assessments"
+
+[[outputs]]
+id = "yZTCO39qAy4RwbPod_Dre"
+uri = "file://mobile/store-assets/phone-screenshots/phone-02-assignment.png"
+type = "image"
+title = "2 – Practice Assignments"
+
+[[outputs]]
+id = "I-iJGZGGlj2kT8P_EEEoe"
+uri = "file://mobile/store-assets/phone-screenshots/phone-03-dpp.png"
+type = "image"
+title = "3 – Daily Practice Problems"
+
+[[outputs]]
+id = "mfaeWvDPvUeJ7S0k0ADF_"
+uri = "file://mobile/store-assets/phone-screenshots/phone-04-pyqs.png"
+type = "image"
+title = "4 – Previous Year Questions"
+
+[[outputs]]
+id = "wcys7F--kSZT9wmmw3j_0"
+uri = "file://mobile/store-assets/phone-screenshots/phone-05-results.png"
+type = "image"
+title = "5 – Review Your Test Results"
+
+[[outputs]]
+id = "kS_M0qPrI5Upvi7nCw2-R"
+uri = "file://mobile/store-assets/phone-screenshots/phone-06-doubts.png"
+type = "image"
+title = "6 – Get Instant Doubt Support"
+
+[[outputs]]
+id = "7taX2PKDhR8LRFYk2Ue6R"
+uri = "file://mobile/store-assets/phone-screenshots/phone-07-explore.png"
+type = "image"
+title = "7 – Explore Courses for Every Goal"
+
+[[outputs]]
+id = "vK--MB0ARBv32CB1js5cE"
+uri = "file://mobile/store-assets/phone-screenshots/phone-08-rewards.png"
+type = "image"
+title = "8 – Earn Badges and Certificates"
+
+[[outputs]]
+id = "-sUs5sXHqimKpwn2Jqe-Q"
+uri = "file://mobile/store-assets/phone-screenshots/phone-09-dashboard.png"
+type = "image"
+title = "9 – Track Your Learning Journey (Dashboard)"
+
+[[outputs]]
+id = "_-j_Qlsk0I30sMNX7749i"
+uri = "file://mobile/store-assets/phone-screenshots/phone-10-forum.png"
+type = "image"
+title = "10 – Community Forum and Discussions"
+
+[[outputs]]
+id = "7MUemSSGThxYODYI5AIWI"
+uri = "file://mobile/store-assets/phone-screenshots/phone-11-my-courses.png"
+type = "image"
+title = "11 – All Your Enrolled Courses"
+
+[[outputs]]
+id = "J5aCxavg8ErjBBW1iZ7Ic"
+uri = "file://mobile/store-assets/phone-screenshots/phone-12-ai-lecture.png"
+type = "image"
+title = "12 – AI-Powered Video Lectures"
+
+[[outputs]]
+id = "O_5q66DHsCf_1MLk5S260"
+uri = "file://mobile/simple-lecture-signing-key.tar.gz"
+type = "unspecified"
+title = "Signing key bundle (.pem to submit + keystore to back up)"
+
+[[outputs]]
+id = "4-dIz3JteOOCWAG_71Gl1"
+uri = "file://mobile/upload_certificate_new.pem"
+type = "unspecified"
+title = "New upload certificate (for Google Play reset ticket)"
+
+[[outputs]]
+id = "FsA2yNYHqFud2ESRkrvUK"
+uri = "file://mobile/keystore_backup.zip"
+type = "unspecified"
+title = "Keystore backup (keystore + certificate + password)"

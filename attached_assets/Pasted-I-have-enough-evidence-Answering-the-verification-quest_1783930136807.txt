@@ -1,0 +1,63 @@
+I have enough evidence. Answering the verification questions:
+
+1. V4 Player Proxy URL ✅
+`src/components/learning/v4/constants.ts:4`
+```ts
+export const V4_PROXY_BASE = `${SUPABASE_URL}/functions/v1/v4-player-proxy`;
+```
+Yes correct (named `V4_PROXY_BASE`, not `V4_PLAYER_PROXY`). A v3-player-proxy also exists — `src/components/learning/v3/constants.ts`: `V3_PROXY_BASE = ${SUPABASE_URL}/functions/v1/v3-player-proxy`. Both are used (V3 for legacy `/v3-player` route + Hero V3 launcher + `V3TrialPage`; V4 for the main player).
+
+2. Free Preview Chapter Source ✅
+Table: `course_free_access_chapters`. Hook: `src/hooks/useCourseFreeAccess.ts` — `useCourseFreeAccess(courseId)` queries by `course_id` only, returning `{id, course_id, subject_id, chapter_id}`. Additionally `useCourseFreePreviewLimits(courseId)` reads `courses.free_preview_ai_limit` / `free_preview_doubts_limit`. Chapter-level only — no topic-level free flag exists; the row grants access to every topic within that chapter.
+
+3. Topic Lecture Visibility ✅
+Hook: `src/hooks/useTopicLectureVisibility.ts`, and also inlined in `src/hooks/usePublishedAILectures.ts` (lines 72–78).
+Mode values: `"both" | "hide_marketing" | "hide_lecture"` (default = `"both"`, not `"none"`).
+Filter logic in `usePublishedAILectures.ts`:
+```ts
+if (mode === 'hide_marketing') return lectures.filter((l) => !l.is_marketing);
+if (mode === 'hide_lecture')   return lectures.filter((l) =>  l.is_marketing);
+```
+So `hide_lecture` keeps only marketing lectures (removes ones where `is_marketing === false`) — confirmed.
+
+4. V4 Presentation Fetch ✅
+`V4Player.tsx:170`:
+```ts
+const url = `${V4_PROXY_BASE}/player/jobs/${jobId}/presentation.json?t=${Date.now()}`;
+```
+Exactly as you have it. It uses `presentation.json`, not `presentation.js`. `jobId` is the external job id passed via `initialJobId`.
+
+5. Language Switching ✅
+Resolver: `getMergedVideoForLanguage(presentation, lang)` in `src/components/learning/v4/utils.ts` (lines 28–40):
+```ts
+const url  = l === 'english' ? p.vimeo_mp4_url        : p[`${l}_vimeo_mp4_url`];
+const path = l === 'english' ? p.final_video_path     : p[`${l}_final_video`];
+```
+So English → `vimeo_mp4_url`, Kannada → `kannada_vimeo_mp4_url`. If the vimeo mp4 is missing, it falls back to `<lang>_final_video` served via the proxy/CDN through `getMediaSrc()`. Language switching sets state (`setLanguage`) and re-renders — `<video src>` swaps (no reload of the whole player). For sec 0/1 avatars and interactive types (intro/summary/memory/quiz) it forces the avatar variant per `avatar_languages[]`.
+
+6. Player Type ✅
+Custom HTML5 `<video>` element (`VimeoDirectPlayer.tsx` — plain `<video ref={videoRef}>` with native controls, no iframe). `player.vimeo.com/video/{id}` is NOT used in the V4 preview flow; only direct progressive MP4 URLs (Vimeo's `.mp4` progressive links or job-folder mp4s via proxy). The `isVimeoUrl` check just detects the vimeo.com hostname to choose the unbranded direct-mp4 renderer over `V4MergedPlayer`.
+
+7. V3 Code Presence ✅
+- `V3CompletionDialog` exists (`src/components/learning/v3/V3CompletionDialog.tsx`) — and is imported by the legacy `EducationalVideoPlayer.tsx`.
+- `player_v2` references exist as URL strings only (legacy Port 5005 video-generation-job URLs in `useVideoGenerationJobs.ts`, admin pipeline pages, etc.) — not a runtime player.
+- Both V3 and V4 are present. V3 is used via `/v3-player` route, `V3TrialPage`, `HeroV3Launcher`, and as a fallback when a user picks Kannada on jobs listed in `V3_TRIAL_JOB_IDS` inside V4Player (`redirectToV3Trial`). V4 is the default for the actual course learning flow.
+
+8. Course Preview Route Flow ✅
+Route (`src/App.tsx:316`): `/course/:slug/preview` → `CoursePreviewRoute` (`src/pages/CoursePreviewRoute.tsx`) which:
+1. Loads course by slug, checks enrollment (redirects to `/learning/:id` if enrolled).
+2. Otherwise renders `<Learning previewMode previewCourseId=... />`.
+3. Inside Learning, the AI-lecture list is rendered by `src/components/learning/RecordedVideos.tsx`, which owns and mounts `<V4PlayerDialog>` (lines 670 & 1105) → `V4PlayerDialog` portals `<V4Player>` into `document.body`.
+
+9. shouldUseV4Player gate ⚠️
+`src/lib/playerSelection.ts` exists with `V4_COURSE_IDS = { 'e74e8e53-...' /* D.Pharmacy testing */ }` and `shouldUseV4Player(courseId)`. However, `RecordedVideos.tsx` and `V4PlayerPage` import `V4PlayerDialog` directly — a grep shows `shouldUseV4Player` is defined but not consumed anywhere in `src/`. In practice every course goes through V4 in the current app; the gate is dead-code / legacy. (Worth double-checking in your Replit port context, but there is no active per-course branching to V3.)
+
+10. Key Supabase Constants ✅
+`src/lib/supabaseUrl.ts`:
+```ts
+export const SUPABASE_URL        = "https://supabase-proxy.utuberpraveen.workers.dev";
+export const SUPABASE_DIRECT_URL = "https://oxwhqvsoelqqsblmqkxx.supabase.co";
+```
+And `V4_PROXY_BASE = ${SUPABASE_URL}/functions/v1/v4-player-proxy` → resolves to `https://supabase-proxy.utuberpraveen.workers.dev/functions/v1/v4-player-proxy`. All three values are current. The Cloudflare Worker proxy is the mandatory client path (Supabase direct domain is IP-blocked in some regions per project memory).
+
+No files were modified.

@@ -1,0 +1,452 @@
+## Notes tab — Data fetch spec for Replit AI
+
+This is a hand-off for the mobile team. It describes **exactly how the Notes tab in the web app fetches its data**: which endpoints, what payloads to send, what responses come back, and how to assemble the final view model. No UI code here — see the earlier UI spec for that.
+
+Reference implementation: `src/hooks/useTopicNotes.ts` (single hook that produces everything the Notes tab renders).
+
+---
+
+### 0. High-level idea
+
+Notes is a **read-only view of the same JSON the AI video player uses**. There is no dedicated "notes" table and no dedicated notes endpoint. To render the Notes tab for a given `topicId`, the client makes **3 Supabase REST calls** (plus an optional 4th), then buckets Question Bank rows per section in-memory.
+
+```
+topicId
+  │
+  ├─► (1) ai_assistant_documents  → doc ids for this topic
+  │
+  ├─► (2) video_generation_jobs   → latest published presentation_json
+  │        (filter by document_id IN doc ids)
+  │
+  ├─► (3) questions               → all question bank rows for topicId
+  │
+  └─► (4) subtopics (optional)    → to map subtopic_id → section by title
+```
+
+All 4 endpoints are standard Supabase PostgREST calls hit via the Supabase JS SDK. The web app uses the **anon key + logged-in user's JWT** (RLS enforced). Mobile should do the same — do **not** use the service role key on the client.
+
+---
+
+### 1. Base setup (mobile client)
+
+- **Base URL:** `https://<PROJECT_REF>.supabase.co/rest/v1`
+- **Headers on every request:**
+  ```
+  apikey: <SUPABASE_ANON_KEY>
+  Authorization: Bearer <user_access_token>   // from Supabase auth session
+  Accept: application/json
+  Content-Type: application/json
+  ```
+- **RLS:** Both `ai_assistant_documents`, `video_generation_jobs`, `questions`, and `subtopics` already have policies that allow authenticated students who own an enrollment to read. Mobile inherits the same policies — no changes needed.
+
+If mobile prefers a Supabase SDK (`supabase-js`, `supabase-flutter`, `supabase-kt`), use the SDK; the URLs below map 1-to-1 to SDK calls (`from(...).select(...)` etc.). The SDK snippets are shown next to each REST call.
+
+---
+
+### 2. Endpoint #1 — Get document ids for the topic
+
+**Purpose:** Every AI lecture is generated from one or more `ai_assistant_documents` rows. We first fetch all doc ids attached to this topic.
+
+**REST call:**
+```
+GET /rest/v1/ai_assistant_documents
+    ?select=id
+    &topic_id=eq.<TOPIC_ID>
+```
+
+**SDK equivalent:**
+```ts
+supabase
+  .from("ai_assistant_documents")
+  .select("id")
+  .eq("topic_id", topicId);
+```
+
+**Response payload:**
+```json
+[
+  { "id": "b3a1f2c4-..." },
+  { "id": "e77c1d90-..." }
+]
+```
+
+- Empty array → **no lecture exists** for this topic → show empty state, stop here.
+- Otherwise, collect `id`s into `docIds: string[]` for the next call.
+
+---
+
+### 3. Endpoint #2 — Get the latest published presentation JSON
+
+**Purpose:** Fetch the single most-recent completed & published video job for those docs. Its `presentation_json.sections` **is** the notes content.
+
+**REST call:**
+```
+GET /rest/v1/video_generation_jobs
+    ?select=id,presentation_json,updated_at,created_at
+    &document_id=in.(<id1>,<id2>,...)
+    &is_published=eq.true
+    &status=eq.completed
+    &order=created_at.desc
+    &limit=1
+```
+
+**SDK equivalent:**
+```ts
+supabase
+  .from("video_generation_jobs")
+  .select("id, presentation_json, updated_at, created_at")
+  .in("document_id", docIds)
+  .eq("is_published", true)
+  .eq("status", "completed")
+  .order("created_at", { ascending: false })
+  .limit(1);
+```
+
+**Response payload (single element array):**
+```json
+[
+  {
+    "id": "9a7b6c...",
+    "updated_at": "2026-07-12T05:14:22.108Z",
+    "created_at": "2026-07-12T05:11:03.554Z",
+    "presentation_json": {
+      "sections": [
+        {
+          "section_id": "1",
+          "section_type": "intro",
+          "title": "Introduction to Transportation",
+          "narration": {
+            "full_text": "In this section we cover ...",
+            "segments": [
+              { "text": "Human beings transport materials ...",
+                "purpose": "introduce",
+                "duration_seconds": 8.4 }
+            ],
+            "total_duration_seconds": 42.1
+          },
+          "visual_beats": [
+            { "visual_type": "bullet",
+              "display_text": ["Heart pumps blood", "Arteries carry oxygen"],
+              "start_time": 0, "end_time": 8 },
+            { "visual_type": "definition",
+              "display_text": "Transportation is ...",
+              "start_time": 9, "end_time": 14 },
+            { "visual_type": "formula",
+              "latex": "Q = m \\cdot c \\cdot \\Delta T",
+              "start_time": 15, "end_time": 20 },
+            { "visual_type": "image",
+              "image_url": "https://cdn.../diagram.png",
+              "start_time": 21, "end_time": 28 }
+          ],
+          "summary": "…",
+          "key_points": ["…", "…"]
+        }
+      ]
+    }
+  }
+]
+```
+
+- Empty array → **no published lecture** → show empty state.
+- Grab element `[0]` → `job`. Only `job.presentation_json.sections` is needed for rendering.
+- Cache `job.id` and `job.updated_at` (used as `jobId` / `sourceUpdatedAt` in the view model, useful for cache-invalidation on republish).
+
+**Normalize each section** (defensive — some legacy rows omit fields):
+```ts
+{
+  section_id: String(s.section_id ?? index + 1),
+  section_type: s.section_type,
+  title: s.title || `Section ${index + 1}`,
+  narration: s.narration,          // pass-through
+  visual_beats: s.visual_beats,    // pass-through
+  summary: s.summary,
+  key_points: s.key_points,
+}
+```
+
+> ⚠️ `presentation_json` can be large (100–400 KB). Fetch it only when the Notes tab is opened, and cache the response per `topicId` for at least 5 minutes.
+
+---
+
+### 4. Endpoint #3 — Get Question Bank rows for the topic
+
+**Purpose:** Provide per-section "Important" and "Practice" question blocks.
+
+**REST call:**
+```
+GET /rest/v1/questions
+    ?select=id,question_text,question_type,question_format,options,correct_answer,explanation,difficulty,subtopic_id,is_ai_generated,is_verified,is_important
+    &topic_id=eq.<TOPIC_ID>
+    &limit=500
+```
+
+**SDK equivalent:**
+```ts
+supabase
+  .from("questions")
+  .select(
+    "id, question_text, question_type, question_format, options, correct_answer, explanation, difficulty, subtopic_id, is_ai_generated, is_verified, is_important"
+  )
+  .eq("topic_id", topicId)
+  .limit(500);
+```
+
+**Response payload:**
+```json
+[
+  {
+    "id": "…",
+    "question_text": "Which vessel carries oxygenated blood?",
+    "question_type": "mcq",
+    "question_format": "single_correct",
+    "options": { "A": "Vein", "B": "Artery", "C": "Capillary", "D": "Lymph" },
+    "correct_answer": "B",
+    "explanation": "Arteries carry oxygenated blood ...",
+    "difficulty": "easy",
+    "subtopic_id": "1c8...",
+    "is_ai_generated": true,
+    "is_verified": true,
+    "is_important": false
+  }
+]
+```
+
+Notes:
+- `options` can be a JSON object (`{A, B, C, D}`) or an array — normalize on the client.
+- Hard cap of 500 rows is fine; topics rarely exceed that.
+- `is_important === true` → goes to Important block; everything else → Practice block.
+
+---
+
+### 5. Endpoint #4 (optional) — Map subtopic → section by title
+
+**Purpose:** If questions have `subtopic_id`, we try to match each subtopic's title to a section title so questions land in the right section.
+
+Only call this if `questions.some(q => q.subtopic_id)`.
+
+**REST call:**
+```
+GET /rest/v1/subtopics
+    ?select=id,title
+    &id=in.(<sub_id_1>,<sub_id_2>,...)
+```
+
+**SDK equivalent:**
+```ts
+supabase
+  .from("subtopics")
+  .select("id, title")
+  .in("id", uniqueSubIds);
+```
+
+**Response payload:**
+```json
+[
+  { "id": "1c8...", "title": "Blood vessels" },
+  { "id": "9df...", "title": "The Heart" }
+]
+```
+
+Build `subtopicIdToSection: Map<string, string>` where value = matched `section_id`. Matching rule (case-insensitive substring, either direction):
+```ts
+section.title.toLowerCase().includes(sub.title.toLowerCase())
+|| sub.title.toLowerCase().includes(section.title.toLowerCase())
+```
+
+If nothing matches, drop that subtopic mapping — the question falls into round-robin distribution (below).
+
+---
+
+### 6. Client-side bucketing (must match web exactly)
+
+Given `sections`, `allQuestions`, and `subtopicIdToSection`, produce `questionsBySection: Record<sectionId, Question[]>`:
+
+```ts
+const questionsBySection: Record<string, Question[]> = {};
+sections.forEach(s => { questionsBySection[s.section_id] = []; });
+
+const unbucketed: Question[] = [];
+for (const q of allQuestions) {
+  const bucket = q.subtopic_id ? subtopicIdToSection.get(q.subtopic_id) : undefined;
+  if (bucket && questionsBySection[bucket]) {
+    questionsBySection[bucket].push(q);
+  } else {
+    unbucketed.push(q);
+  }
+}
+// Round-robin distribute the rest so no section is empty
+if (sections.length && unbucketed.length) {
+  unbucketed.forEach((q, i) => {
+    const secId = sections[i % sections.length].section_id;
+    questionsBySection[secId].push(q);
+  });
+}
+```
+
+Within each section bucket:
+- **Important:** `q.is_important === true` → first 2.
+- **Practice:** rest, sorted so `is_verified === true` first → first 3.
+
+---
+
+### 7. Final view model returned to the UI
+
+Combine everything into a single object (`TopicNotesData` in the web app):
+
+```ts
+{
+  jobId: string | null,                 // video_generation_jobs.id (for cache key)
+  sourceUpdatedAt: string | null,       // ISO timestamp — republish invalidation
+  hasPublishedLecture: boolean,         // false → show empty state
+  sections: NotesSection[],             // from presentation_json.sections
+  questionsBySection: Record<string, Question[]>,
+  allQuestions: Question[]              // raw, for search / global use
+}
+```
+
+The Notes UI renders **only** from this object. All markdown/LaTeX handling, section→spread building, and question preview toggling is downstream of this payload.
+
+---
+
+### 8. Caching & invalidation rules
+
+- Cache key: `["topic-notes", topicId]`.
+- `staleTime`: **5 minutes**.
+- `retry`: **2** on failure.
+- Refetch triggers:
+  - User pulls to refresh on the Notes screen.
+  - `sourceUpdatedAt` changes (poll on tab open, or realtime channel on `video_generation_jobs` filtered by `id=eq.<jobId>`).
+  - Successful call to `generate-topic-notes-questions` edge function (see §9).
+
+---
+
+### 9. Optional edge function — Generate more practice questions
+
+Only invoked when a section has fewer than 3 practice questions and the user taps "Generate practice questions".
+
+**Endpoint:**
+```
+POST https://<PROJECT_REF>.supabase.co/functions/v1/generate-topic-notes-questions
+Authorization: Bearer <user_access_token>
+apikey: <SUPABASE_ANON_KEY>
+Content-Type: application/json
+```
+
+**Request body:**
+```json
+{
+  "topic_id": "…",
+  "chapter_id": "…",
+  "subject_id": "…",
+  "section_id": "1",
+  "section_title": "Introduction to Transportation",
+  "section_text": "Full narration text of the section…",
+  "key_points": ["Heart pumps blood", "Arteries carry oxygen", "…"],
+  "count": 5
+}
+```
+
+**Response body (success):**
+```json
+{ "inserted": 5, "question_ids": ["…","…","…","…","…"] }
+```
+
+**Error codes to handle:**
+- `429` → too many requests, back off and retry.
+- `402` → credits exhausted → surface billing message.
+- `4xx/5xx` → toast + roll back UI state.
+
+After success, refetch `["topic-notes", topicId]` so the new questions appear in the correct section.
+
+---
+
+### 10. Full example — pseudo-code the mobile team can port directly
+
+```ts
+async function fetchTopicNotes(topicId: string) {
+  // 1
+  const { data: docs } = await sb
+    .from("ai_assistant_documents")
+    .select("id")
+    .eq("topic_id", topicId);
+  const docIds = (docs ?? []).map(d => d.id);
+  if (docIds.length === 0) return emptyResult();
+
+  // 2
+  const { data: jobs } = await sb
+    .from("video_generation_jobs")
+    .select("id, presentation_json, updated_at, created_at")
+    .in("document_id", docIds)
+    .eq("is_published", true)
+    .eq("status", "completed")
+    .order("created_at", { ascending: false })
+    .limit(1);
+  const job = jobs?.[0];
+  if (!job) return emptyResult();
+
+  const rawSections = job.presentation_json?.sections ?? [];
+  const sections = rawSections.map(normalizeSection);
+
+  // 3
+  const { data: qs } = await sb
+    .from("questions")
+    .select("id, question_text, question_type, question_format, options, correct_answer, explanation, difficulty, subtopic_id, is_ai_generated, is_verified, is_important")
+    .eq("topic_id", topicId)
+    .limit(500);
+  const allQuestions = qs ?? [];
+
+  // 4
+  const subMap = new Map<string, string>();
+  const subIds = [...new Set(allQuestions.map(q => q.subtopic_id).filter(Boolean))];
+  if (subIds.length) {
+    const { data: subs } = await sb
+      .from("subtopics").select("id, title").in("id", subIds);
+    (subs ?? []).forEach(sub => {
+      const match = sections.find(sec =>
+        sec.title.toLowerCase().includes(sub.title.toLowerCase()) ||
+        sub.title.toLowerCase().includes(sec.title.toLowerCase())
+      );
+      if (match) subMap.set(sub.id, match.section_id);
+    });
+  }
+
+  // 5 — bucket
+  const questionsBySection = bucketQuestions(sections, allQuestions, subMap);
+
+  return {
+    jobId: job.id,
+    sourceUpdatedAt: job.updated_at ?? job.created_at,
+    hasPublishedLecture: true,
+    sections,
+    questionsBySection,
+    allQuestions,
+  };
+}
+```
+
+---
+
+### 11. Error / empty-state matrix
+
+| Situation | Detection | UI |
+|---|---|---|
+| Any REST call fails | non-2xx / thrown error | Error state, retry button |
+| No `ai_assistant_documents` for topic | endpoint #1 returns `[]` | "Notes not available yet" empty state |
+| No published completed job | endpoint #2 returns `[]` | "Notes not available yet" empty state |
+| `presentation_json.sections` empty | job present but 0 sections | "Notes not available yet" empty state |
+| Questions call fails or returns `[]` | endpoint #3 | Notes still render; question blocks show "No practice questions yet" |
+| 401/403 | user not authenticated / RLS deny | Force sign-in / show access-denied state |
+
+---
+
+### 12. Do NOT do these
+
+- Don't fabricate notes when `presentation_json` is missing — the mobile app must never invent content.
+- Don't call the service role key from the mobile client.
+- Don't query `presentation_json` when only listing lectures; only fetch it inside the Notes screen (it's heavy).
+- Don't try to persist "notes" as separate rows in a new table — the JSON is the source of truth and gets re-generated by the pipeline.
+- Don't strip SSML/HTML tags from narration on the **server** — sanitize only in the renderer, so re-use with the audio player remains intact.
+
+---
+
+Approve this and I'll also save this exact content as `NOTES_MOBILE_FETCH_SPEC.md` in the repo so you can paste the file directly to Replit AI.

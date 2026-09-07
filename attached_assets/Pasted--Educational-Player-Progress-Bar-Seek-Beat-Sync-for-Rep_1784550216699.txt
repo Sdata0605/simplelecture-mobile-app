@@ -1,0 +1,133 @@
+# Educational Player — Progress Bar, Seek & Beat Sync (for Replit / Mobile App)
+
+Goal: document exactly how the web Educational Player renders its progress bar, handles forward/backward seek, and keeps visual beats perfectly aligned with the avatar, so Replit can port the same behavior to the mobile app (Android/iOS or Capacitor WebView).
+
+---
+
+## 1. Master clock = Avatar `<video>` element
+
+The avatar video is the **single source of truth** for time. Everything else (progress bar, subtitles, visual beats, watch-time tracking) slaves off it.
+
+- Wrapper: `usePlaybackController(masterRef)` (`src/components/learning/player/hooks/usePlaybackController.ts`).
+- It exposes `play / pause / seek / getTime / onTick / onSeek` and a state machine: `idle | loading | ready | playing | paused | seeking | stalled | ended`.
+- Time is broadcast on `requestAnimationFrame` (not `timeupdate`) so slaves get smooth, drift-free samples.
+- A stall watchdog (`STALL_MS = 2000`) reloads the master if `currentTime` stops advancing while `state === 'playing'`.
+- On every native `seeked` event it fires an explicit `seek` event to slaves so they re-align even when the new time happens to fall inside their previous window.
+
+**Mobile equivalent:** use the platform video player as master (`ExoPlayer` on Android, `AVPlayer` on iOS, or the same HTML `<video>` inside a Capacitor WebView). Emit a 30–60 Hz tick from a display-link / choreographer callback, and always emit a `seek` event after the OS reports seek-complete.
+
+---
+
+## 2. Progress bar
+
+Rendered by `PlayerControls.tsx`.
+
+- Inputs from parent: `currentTime`, `duration`, `onSeek(time)`.
+- Total duration = sum of every section's `narration.total_duration_seconds` (accumulated across all sections, not just current section) — see `totalDuration` returned from `usePlayerState`.
+- Fill = `progress = (currentTime / duration) * 100` → `width: ${progress}%` on `.timeline-progress`, and `left: ${progress}%` on `.timeline-handle`.
+- Seek on click:
+  ```ts
+  const rect = e.currentTarget.getBoundingClientRect();
+  const pct  = (e.clientX - rect.left) / rect.width;
+  onSeek(clamp(pct * duration, 0, duration));
+  ```
+- Keyboard: ArrowLeft/Right = ±10 s via the same `seek()`.
+
+`onSeek` → `usePlaybackController.seek(t)` → sets `master.currentTime = t`. The native `seeked` event then broadcasts to all listeners.
+
+**Mobile:** bind a `Slider` (Compose / SwiftUI) two-way to `currentTime`; on drag-end call the same `seek(seconds)` on the master player.
+
+---
+
+## 3. Segment / beat timing model
+
+Built once per section by `buildSegmentTimingMap(segments)` (`utils/timingUtils.ts`):
+
+```
+cumulativeTime = 0
+for each narration.segments[i]:
+  startTime = cumulativeTime
+  endTime   = cumulativeTime + duration_seconds
+  cumulativeTime += duration_seconds
+```
+
+Each segment carries `beat_videos: string[]` (paths to the visual-beat MP4 clips). The player picks the "active" segment with `findCurrentSegment(currentTime, timingMap)` — a straight `t >= start && t < end` scan.
+
+For every avatar tick the player:
+1. Finds the active segment (`entry`).
+2. Computes `segmentStartOffset = playerTime - entry.startTime`.
+3. Chooses the beat clip for that segment.
+4. Feeds `<video src=beatClip>` and, when the segment changes, tells `VideoLayer` to seek the beat clip to `segmentStartOffset`.
+
+This is why beats stay in lock-step with the avatar even when the user scrubs.
+
+---
+
+## 4. Forward & backward seek — the seek token
+
+Naive approach ("just watch `timeupdate`") is what caused the earlier bug where scrubbing back left the beat frozen on beat #3. The fix, in `EducationalVideoPlayer.tsx`:
+
+- A monotonic `beatSeekToken` ref, bumped **only** when the player intentionally wants the beat `<video>` to seek to `segmentStartOffset`.
+- `VideoLayer` writes `beatVideo.currentTime` only when the token changes — never on ordinary renders. This kills seek loops.
+- Whenever `playerTime` regresses (backward scrub) OR moves outside the active beat window, the player:
+  1. Clears any "beat completed" flag (so a previously-ended beat is re-attached).
+  2. Recomputes the active segment.
+  3. If still the same beat window → bumps token with `branch: 'reseek-beat-same-window'` and offset = `playerTime - active.startTime`.
+  4. If new beat window → swaps `src` and bumps token once so the new clip starts at the correct offset.
+- A backward seek is detected as "natural exit is forward only": `playerTime < active.startTime` → treat as `seek-back`, don't mark the beat as completed.
+
+Result: forward scrub jumps to the correct beat + correct offset; backward scrub rewinds the beat clip; scrubbing inside the same segment just re-syncs the beat offset.
+
+**Mobile port:**
+- Keep the same token pattern (`beatSeekVersion: Int`). Only call `beatPlayer.seekTo(offset)` when the version changes.
+- Detect regression with a `lastReportedTime` ref; on regression, clear the "beat completed" flag and force a re-seek.
+- Both master and beat players must be prepared/pre-buffered (`ExoPlayer.setMediaItem` + `prepare`, `AVPlayerItem.preferredForwardBufferDuration`) so re-seek is instant.
+
+---
+
+## 5. Visual-beat overlay reveal
+
+`getRevealedBeatIndices(currentTime, beats, timingMap)`:
+- If beat has `start_time` → revealed when `t >= start_time`.
+- Else if beat has `segment_id` → revealed when its segment starts.
+- Else → fallback proportional reveal `(index / beats.length) * totalDuration`.
+
+This is the same function used to redraw the bullet list, LaTeX, image slot etc. Backward seek naturally *un-reveals* beats because they're recomputed every tick from `currentTime`.
+
+---
+
+## 6. Watch-time / completion (progress-bar-adjacent)
+
+`useVideoCompletionTracker`:
+- `requiredWatchSeconds = totalDuration - 60` (i.e., "watched" when user is within the last minute).
+- On each tick delta the tracker accumulates real elapsed play time (not scrubbed time) and, when threshold is hit, calls `mark-video-watched` + `award-badge` + `check-chapter-completion`.
+- Seeking does not falsely inflate accumulated time — the tracker only counts positive deltas while `state.isPlaying`.
+
+Mobile must reuse the same rule to keep completion parity with web.
+
+---
+
+## 7. What Replit must implement on mobile
+
+1. **Master player** wrapping the avatar video, exposing `play/pause/seek/onTick/onSeek/state`.
+2. **Beat player** (second video surface) driven purely by the master's ticks + seek events; never by wall-clock.
+3. **Timing map builder** identical to `buildSegmentTimingMap` (cumulative sum of `duration_seconds`).
+4. **Progress bar**: Slider bound to `currentTime` / `duration = sum(section.narration.total_duration_seconds)`. On drag-end → `master.seek(t)`.
+5. **Seek token pattern** (`beatSeekVersion`) so the beat player re-seeks exactly once per intentional realignment.
+6. **Backward-seek handling**: on time regression, clear beat-completed flag and force re-seek to `t - activeSegment.start`.
+7. **Overlay reveal** via the same `getRevealedBeatIndices` logic (port to Kotlin/Swift/TS).
+8. **Watch-time tracker** using `totalDuration - 60` rule; only accumulate deltas while state == playing.
+9. **Stall watchdog**: if master `currentTime` stops advancing >2 s while state=playing, call `prepare()`/`.load()` and resume on `canplay`.
+10. **Language/quality switches**: swap master `src`, remember `currentTime`, restore after `canplay`, bump `beatSeekVersion` to force beats to realign.
+
+---
+
+## 8. Key files to hand to Replit
+
+- `src/components/learning/player/hooks/usePlaybackController.ts` — master clock contract.
+- `src/components/learning/player/utils/timingUtils.ts` — timing map + reveal logic.
+- `src/components/learning/player/PlayerControls.tsx` — progress bar + seek UX.
+- `src/components/learning/player/EducationalVideoPlayer.tsx` (lines ~1400–1820) — beat seek token, backward-seek handling, section transitions.
+- `src/hooks/useVideoCompletionTracker.ts` — completion rule.
+
+Once approved, I can append this to `.lovable/plan.md` (marketing-player + language-switching spec) so the whole player contract for Replit lives in one document.

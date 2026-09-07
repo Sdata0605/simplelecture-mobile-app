@@ -1,0 +1,52 @@
+Add the same hero banner video that plays on the SimpleLecture website homepage into the Android app's home screen banner section. Match the web behavior exactly (autoplay, muted, looping, inline, rounded card).
+
+Video source (single source of truth):
+
+Direct progressive MP4 URL (Vimeo signed link — use this, NOT the Vimeo iframe embed, because the Vimeo player is domain-restricted and returns 403 on non-whitelisted origins/apps):
+https://player.vimeo.com/progressive_redirect/playback/1205802274/rendition/720p/file.mp4%20%28720p%29.mp4?loc=external&oauth2_token_id=1806524992&signature=58cc606332ec40e26eee1fd34d8c57a5e5354f8eb83b4696201fbe31d45ee9f8
+Vimeo ID (informational only): 1205802274
+Lecture Job ID (for reference): SocialScience_20260630115302591_5462fd6a
+Title: Discovery of a New Sea Route to India
+Subtitle: SSLC 10 — Social Science • Chapter 1 (Topic 1.3)
+Config location on web (mirror this constant in the app): src/lib/homepageHeroLecture.ts exports HOMEPAGE_HERO_LECTURE with fields: jobId, vimeoId, videoMp4Url, title, subtitle, player. Create the equivalent constant/model in the Android app (e.g. HomepageHeroLecture.kt) so the URL stays in one place and can be swapped later.
+
+Playback behavior (must match web HeroV4Launcher.tsx):
+
+autoPlay = true
+muted = true (required for autoplay on mobile)
+loop = true
+playsInline = true (no fullscreen takeover)
+controls = true (user can tap to unmute / seek)
+preload = "metadata"
+Aspect ratio: 16:9
+Object-fit: contain on black background
+No custom player chrome, no close button, no "Free Sample Lecture" badge — just the raw video in a rounded card
+Design specs:
+
+Container: full width, centered, top margin ~32dp
+Card: rounded corners 16dp, 4dp white/20% border, strong drop shadow, black background
+Minimum height on mobile: 270dp (add extra height only if the layout requires it)
+Aspect ratio locked to 16:9
+Recommended Android implementation:
+
+Use ExoPlayer (Media3) with PlayerView — it handles progressive MP4 over HTTPS, autoplay, loop, and mute cleanly. Do NOT use WebView or the Vimeo SDK (domain-restricted).
+Set: playWhenReady = true, repeatMode = Player.REPEAT_MODE_ALL, volume = 0f, useController = true, resizeMode = RESIZE_MODE_FIT.
+Wrap PlayerView in a CardView (cornerRadius 16dp, elevation 8dp, background black) with a 16:9 ConstraintLayout ratio.
+Release the player in onStop()/onDestroy() to avoid leaks; pause when the fragment/screen is not visible.
+Networking:
+
+The MP4 is a plain HTTPS GET — no auth headers, no cookies. Just stream it.
+Ensure android:usesCleartextTraffic is NOT required (URL is https).
+Add internet permission if not already present: <uses-permission android:name="android.permission.INTERNET" />.
+Do NOT:
+
+Do not embed the Vimeo iframe / Vimeo player SDK.
+Do not re-encode or re-host the file.
+Do not hardcode the URL in the View — put it in a constants/model file so it can be updated later without a release.
+Acceptance criteria:
+
+Opening the app home screen shows the banner video autoplaying muted in a rounded 16:9 card.
+Video loops seamlessly.
+Tapping the video shows native controls (play/pause, mute toggle, seek).
+No 403 or CORS-style errors in logcat.
+Player is released when leaving the screen.

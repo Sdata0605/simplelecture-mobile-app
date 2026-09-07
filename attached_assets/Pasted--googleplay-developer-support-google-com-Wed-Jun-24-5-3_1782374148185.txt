@@ -1,0 +1,45 @@
+
+googleplay-developer-support@google.com
+Wed, Jun 24, 5:34 PM (19 hours ago)
+Thanks for contacting the Google Play Developer Support team. The ticket number for your support request is referenced in the subject line of this message. We a
+
+googleplay-developer-support@google.com
+12:39 PM (45 minutes ago)
+to me
+
+Hi Developers of simple lecture,
+Thank you for contacting Google Play Developer Support.
+
+Please be informed that the upload key reset request should be done directly via the Play Console.
+
+Since you have already generated a new PEM file, you can submit the request to reset your app upload key by following the steps below:
+
+Go to your app and select “Protected with Play”.
+Click “Play Store protection” and select “Manage Play app signing”.
+Go to the Upload Key Certificate section and click Request Upload key reset.
+Provide a reason why you’re requesting a key reset.
+Enter the PEM file.
+Click Request.
+We recommend that you adjust your planning to include a buffer period of 48 hours from when the upload key has been reset before you can use the new upload key. You can learn more about using app signing by Google Play here.
+
+Please don't hesitate to reply to this email if you need further assistance. We're happy to help. If we do not hear from you, we will consider the matter closed.
+
+Regards,
+Emma 
+Google Play Developer Support
+
+See tips on how to protect yourself from email scams.
+
+You can now request help from the Help page in your Play Console account.  If you don't have access to Play Console, ask your account admin for an invite.
+
+On Wed, Jun 24, 2026 at 12:04 UTC googleplay-developer-support@google.com wrote:
+Thanks for contacting the Google Play Developer Support team.
+
+The ticket number for your support request is referenced in the subject line of this message.
+
+We ask that you do not send duplicate tickets as this will not reduce response time.
+
+We appreciate your patience while we process your request. 
+
+Regards,
+Google Play Developer Support Team

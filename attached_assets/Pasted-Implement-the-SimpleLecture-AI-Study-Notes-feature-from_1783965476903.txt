@@ -1,0 +1,1766 @@
+Implement the SimpleLecture **AI Study Notes feature** from the Lovable web application inside this React Native/Expo mobile application.
+
+The Lovable implementation has already been analysed. Treat the details below as the functional reference, but adapt browser-specific behaviour properly for React Native.
+
+## Critical change-control rules
+
+Before editing:
+
+1. Create a Replit checkpoint or Git commit.
+2. Inspect the existing repository structure.
+3. Find the current Learning screen, Topic Details screen, tab navigation, Supabase client, React Query setup, markdown libraries, video lecture types, question types, and existing PDF/share utilities.
+4. List the exact files you plan to modify or create.
+5. Reuse existing services, types, navigation patterns, design system, and Supabase client.
+6. Do not create a second Supabase client.
+7. Do not modify the Lovable web application.
+8. Do not modify Supabase database schema, RLS policies, production data, Edge Functions, or secrets.
+9. Do not expose or move `SUPABASE_SERVICE_ROLE_KEY` or `LOVABLE_API_KEY` into the mobile app.
+10. Do not touch or regress the V4 player migration.
+11. Do not deploy or publish automatically.
+12. Do not guess route parameter names or database field names. Confirm them from the repository first.
+13. Make changes in small stages and run targeted TypeScript/tests after every stage.
+
+If an expected table, field, route, dependency, or existing service is different from this specification, adapt to the current codebase and document the difference instead of blindly creating duplicate architecture.
+
+---
+
+# 1. Feature definition
+
+This feature is an **AI-generated study-notes reader**.
+
+It is not:
+
+* a user-authored notes editor;
+* personal annotations;
+* highlights;
+* handwritten notes;
+* voice notes;
+* a student notes database;
+* a note-sync system.
+
+The study notes are projected dynamically from the latest published and completed AI lecture for the selected topic.
+
+The source is:
+
+```text
+video_generation_jobs.presentation_json
+```
+
+joined to the topic through:
+
+```text
+ai_assistant_documents.topic_id
+```
+
+The core flow must be:
+
+```text
+Student opens a topic
+→ opens the Notes tab
+→ app loads the latest published/completed AI lecture job
+→ reads presentation_json.sections
+→ converts the lecture sections into study-note pages
+→ displays the notes in a native book-style reader
+→ optionally displays important/practice questions
+→ optionally generates additional practice questions through the existing Supabase Edge Function
+```
+
+---
+
+# 2. Required data query
+
+Create or update a reusable hook/service such as:
+
+```text
+src/hooks/useTopicNotes.ts
+```
+
+or use the existing mobile project naming convention.
+
+The hook should accept:
+
+```typescript
+topicId: string
+```
+
+It must:
+
+1. Find `ai_assistant_documents` belonging to the selected topic.
+2. Find the latest `video_generation_jobs` row attached to those documents.
+3. Apply:
+
+```text
+is_published = true
+status = completed
+order by created_at descending
+limit 1
+```
+
+4. Read:
+
+```text
+presentation_json
+```
+
+5. Extract:
+
+```text
+presentation_json.sections
+```
+
+6. Load up to 500 questions from:
+
+```text
+questions
+```
+
+where:
+
+```text
+topic_id = selected topic ID
+```
+
+7. Load relevant subtopics if needed for question-to-section matching.
+8. Return typed loading, success, empty and error states.
+
+Do not use:
+
+* `video_url`;
+* Vimeo URLs;
+* V3/V4 player URLs;
+* the video player as the notes renderer.
+
+Notes are based on the structured presentation JSON, not video playback.
+
+## Required presentation section fields
+
+Support the following fields safely when present:
+
+```typescript
+interface TopicNoteSection {
+  section_id?: string | number;
+  section_type?: string;
+  title?: string;
+
+  narration?: {
+    full_text?: string;
+    segments?: Array<{
+      text?: string;
+      purpose?: string;
+      duration_seconds?: number;
+    }>;
+  };
+
+  visual_beats?: Array<{
+    visual_type?: string;
+    display_text?: unknown;
+    image_url?: string;
+    latex?: string;
+    start_time?: number;
+    end_time?: number;
+  }>;
+
+  summary?: unknown;
+  key_points?: unknown;
+}
+```
+
+The parser must tolerate:
+
+* missing narration;
+* missing visual beats;
+* strings;
+* arrays;
+* nested objects;
+* null values;
+* malformed optional data.
+
+Create safe utilities such as:
+
+```typescript
+stripSpeechMarkup(value: string): string
+toDisplayString(value: unknown): string
+cleanNarrationText(value: string): string
+```
+
+`stripSpeechMarkup` should remove SSML/HTML-style tags without destroying normal readable text.
+
+`toDisplayString` must safely render strings, arrays and simple objects without displaying `[object Object]`.
+
+---
+
+# 3. Question bucketing
+
+Questions should be associated with note sections.
+
+Use this logic:
+
+1. If a question has `subtopic_id`, load the matching subtopic title.
+2. Compare the normalized subtopic title with normalized section titles.
+3. Use case-insensitive substring matching.
+4. Map the question to the best-matching section.
+5. Questions that cannot be mapped should be distributed round-robin across available sections.
+6. Deduplicate by normalized `question_text`.
+
+For every section, select:
+
+* up to 2 important questions where `is_important === true`;
+* up to 3 normal practice questions;
+* prefer verified questions first when verification information exists.
+
+Do not crash when there are zero questions or zero subtopics.
+
+---
+
+# 4. Add the Notes entry point
+
+Locate the current topic-learning interface.
+
+Add a `Notes` tab or connect the existing Notes tab to the new mobile notes reader.
+
+Pass the existing topic context:
+
+```typescript
+topicId
+chapterId
+subjectId
+topicTitle
+```
+
+Do not create a duplicate Topic Details screen.
+
+The Notes tab must support:
+
+* loading skeleton;
+* no published lecture state;
+* malformed presentation state;
+* notes available state;
+* network error with retry.
+
+Suggested empty message:
+
+```text
+Study notes are not available for this topic yet.
+```
+
+---
+
+# 5. Default native book reader
+
+Create a native component following the project’s naming conventions, for example:
+
+```text
+src/components/learning/notes/NotesBookReader.tsx
+```
+
+The default Notes experience should be a book-style reader.
+
+## Required UI
+
+Display:
+
+* topic title;
+* Contents button;
+* PDF/Print or Share button;
+* current page indicator;
+* Previous button;
+* Next button;
+* page content;
+* section title;
+* prose;
+* definitions/formulas/equations;
+* images;
+* bullet points;
+* selected questions.
+
+Use the existing app theme and typography.
+
+Do not copy browser CSS directly.
+
+## Native layout
+
+Adapt responsively:
+
+### Phone
+
+* one page at a time;
+* vertical scrolling inside the page if needed;
+* horizontal swipe for previous/next;
+* Previous and Next buttons.
+
+### Tablet
+
+* one or two pages depending on available width.
+
+### Large tablet/desktop-compatible layout
+
+* two-page spread where practical.
+
+Use existing installed libraries first.
+
+If the project already has `react-native-pager-view`, `react-native-gesture-handler`, FlashList, FlatList or another paging solution, reuse it.
+
+Do not add a large dependency unless necessary.
+
+## Navigation behaviour
+
+Support:
+
+* Previous;
+* Next;
+* Contents modal/sheet;
+* jump to section;
+* horizontal swipe;
+* first page;
+* last page.
+
+Browser-only keyboard support is not mandatory for native mobile, but may be preserved for Expo Web if already supported.
+
+---
+
+# 6. Build note pages from sections
+
+Create a pure testable function, for example:
+
+```typescript
+buildNotePages(
+  sections: TopicNoteSection[],
+  questionsBySection: Map<string, Question[]>,
+): NotePage[]
+```
+
+For each section:
+
+## Prose
+
+Build narration text from:
+
+```typescript
+section.narration.segments.map(segment => segment.text)
+```
+
+If segments are unavailable, fall back to:
+
+```typescript
+section.narration.full_text
+```
+
+Clean the narration by:
+
+* stripping SSML/HTML tags;
+* preserving paragraph breaks;
+* splitting long unbroken text into readable paragraphs;
+* preventing empty text blocks.
+
+## Bullets
+
+Treat these `visual_type` values as bullet/key-point content:
+
+```text
+bullet
+bullets
+list
+key_points
+```
+
+Use case-insensitive matching and tolerate variations that contain the word `bullet`.
+
+## Callouts
+
+Treat these as special callout blocks:
+
+```text
+definition
+formula
+equation
+```
+
+Render definitions, formulas and equations distinctly.
+
+## Images
+
+Display valid:
+
+```text
+visual_beats[].image_url
+```
+
+Use the existing image component, caching and loading/error patterns.
+
+Do not allow a broken image to crash the page.
+
+## Pagination
+
+Use a configurable approximate character limit such as:
+
+```typescript
+const PAGE_CHAR_LIMIT = 900;
+```
+
+Do not split words in the middle.
+
+Multiple pages may be produced from one section.
+
+Distribution:
+
+* callouts should preferably appear on the first page of a section;
+* images, bullets and questions should preferably appear on the final page;
+* middle pages may display a small “Continued” indicator;
+* do not create blank pages.
+
+The pagination logic must be a pure function with unit tests.
+
+---
+
+# 7. Markdown and mathematics
+
+Study-note content may include:
+
+* Markdown;
+* tables;
+* lists;
+* inline math;
+* block math;
+* LaTeX.
+
+Inspect currently installed dependencies.
+
+Prefer existing compatible React Native libraries.
+
+Possible implementation options, only if required:
+
+* `react-native-markdown-display` for Markdown;
+* an existing project math component;
+* `react-native-math-view`;
+* a carefully isolated WebView-based KaTeX renderer for math blocks only.
+
+Do not use a full WebView as the whole notes reader unless the current project architecture already relies on it.
+
+Do not install both multiple competing markdown/math libraries.
+
+Ensure strings such as:
+
+```text
+$E = mc^2$
+```
+
+and:
+
+```text
+$$
+a^2 + b^2 = c^2
+$$
+```
+
+render correctly or degrade to readable text rather than disappearing.
+
+---
+
+# 8. Contents modal
+
+Add a native Contents interface.
+
+Use the existing modal, sheet or bottom-sheet component.
+
+Display:
+
+* section title;
+* page number;
+* selected/current indicator.
+
+Selecting an entry must jump to the first page belonging to that section and close the modal.
+
+---
+
+# 9. Legacy card reader fallback
+
+Create or retain a simpler card-based fallback, for example:
+
+```text
+src/components/learning/notes/NotesCardReader.tsx
+```
+
+Each section card should display:
+
+* section title;
+* section type badge when available;
+* narration;
+* bullet/key points;
+* definition/formula/equation callouts;
+* image grid;
+* important questions;
+* practice questions;
+* Generate Practice Questions button when eligible.
+
+Use native collapsible/accordion components.
+
+Do not use browser `<details>`, HTML anchors or `window.scrollTo`.
+
+## Feature flag
+
+Lovable uses:
+
+```text
+localStorage["notes.legacyReader"]
+```
+
+For React Native, use the existing preferences system or AsyncStorage.
+
+Suggested key:
+
+```text
+notes.legacyReader
+```
+
+Default:
+
+```text
+false
+```
+
+Meaning:
+
+* false → book reader;
+* true → legacy card reader.
+
+Do not add AsyncStorage if the application already has another persisted preferences layer.
+
+---
+
+# 10. Generate practice questions
+
+The mobile client must call the existing Supabase Edge Function:
+
+```text
+generate-topic-notes-questions
+```
+
+Use the existing Supabase client:
+
+```typescript
+supabase.functions.invoke('generate-topic-notes-questions', {
+  body: {
+    topic_id: topicId,
+    chapter_id: chapterId,
+    subject_id: subjectId,
+    section_id: sectionId,
+    section_title: sectionTitle,
+    section_text: sectionText,
+    key_points: keyPoints.slice(0, 20),
+    count: 5,
+  },
+});
+```
+
+Do not put AI-provider keys in the mobile application.
+
+Do not call the Lovable AI Gateway directly from React Native.
+
+Do not use a service-role key in the mobile application.
+
+The existing Edge Function is responsible for:
+
+* authentication;
+* input validation;
+* AI request;
+* database insertion;
+* provider secrets.
+
+## Button behaviour
+
+Show `Generate practice questions` only when the section has fewer than 3 normal practice questions.
+
+When clicked:
+
+1. Disable the button.
+2. Show an in-progress state.
+3. Invoke the Edge Function.
+4. On success, show a success toast.
+5. Invalidate/refetch the topic-notes query.
+6. Display the newly inserted questions.
+7. Prevent duplicate button presses.
+8. Restore the button after failure.
+9. Show a useful error message.
+
+Use the existing query key convention:
+
+```typescript
+['topic-notes', topicId]
+```
+
+or adapt it to the current project’s React Query key conventions.
+
+The generated questions should automatically appear in both Notes and the existing Question Bank because they are stored in the standard `questions` table.
+
+---
+
+# 11. PDF, print and sharing
+
+The Lovable web version uses browser printing and an older `html2canvas + jsPDF` component.
+
+Do not copy those browser APIs directly into React Native.
+
+Inspect existing mobile dependencies.
+
+For native Expo, prefer existing packages such as:
+
+* `expo-print`;
+* `expo-sharing`;
+* `expo-file-system`.
+
+Only install missing dependencies after confirming they are compatible with the current Expo SDK.
+
+Implement:
+
+1. Build clean printable HTML from the parsed note sections.
+2. Generate a PDF using `Print.printToFileAsync`.
+3. Open the native share sheet using `Sharing.shareAsync`.
+4. Use a sanitized filename based on the topic title.
+5. Show loading and error states.
+6. Do not include app navigation chrome inside the generated PDF.
+
+If native PDF dependencies are not available and installing them is risky, implement the reader first and clearly report PDF export as a separate blocked task rather than breaking the project.
+
+For Expo Web, browser print may be supported as an optional platform-specific path.
+
+---
+
+# 12. Security requirements
+
+The mobile application must never contain:
+
+* `LOVABLE_API_KEY`;
+* `SUPABASE_SERVICE_ROLE_KEY`;
+* AI-provider private keys;
+* administrator JWTs;
+* hardcoded learner credentials.
+
+Use only the existing public Supabase mobile configuration.
+
+Do not log:
+
+* authorization headers;
+* complete JWTs;
+* private Edge Function responses;
+* service keys.
+
+Do not modify Edge Function secrets.
+
+---
+
+# 13. Performance requirements
+
+* Cache notes using React Query.
+* Use stable query keys.
+* Avoid loading all topics at once.
+* Load notes only for the selected topic.
+* Memoize parsed pages where beneficial.
+* Avoid recalculating pages on every render.
+* Use performant lists/pagers.
+* Do not render all high-resolution images simultaneously.
+* Cancel or ignore stale requests after unmount.
+* Avoid duplicate question-generation calls.
+
+---
+
+# 14. Files likely involved
+
+The actual filenames may differ. Inspect and use the real project structure.
+
+Likely files:
+
+```text
+src/screens/TopicDetailsScreen.tsx
+src/screens/LearningScreen.tsx
+src/components/learning/notes/NotesBookReader.tsx
+src/components/learning/notes/NotesCardReader.tsx
+src/components/learning/notes/NotePage.tsx
+src/components/learning/notes/NotesContentsModal.tsx
+src/hooks/useTopicNotes.ts
+src/services/topicNotesService.ts
+src/lib/notesBookPilot.ts
+src/types/topicNotes.ts
+src/utils/notePagination.ts
+src/utils/noteText.ts
+```
+
+Do not create all these files automatically if equivalent files already exist.
+
+Reuse the current architecture.
+
+---
+
+# 15. Required unit tests
+
+Add focused tests for pure logic.
+
+## Text cleaning
+
+Test:
+
+* SSML removal;
+* HTML tag removal;
+* paragraph preservation;
+* arrays and objects;
+* null/undefined;
+* narration fallback.
+
+## Pagination
+
+Test:
+
+* one short section;
+* one long section;
+* multiple sections;
+* no empty pages;
+* callouts on first section page;
+* bullets/images/questions on last section page;
+* page ordering;
+* section-to-page index mapping.
+
+## Question bucketing
+
+Test:
+
+* matching by subtopic title;
+* case-insensitive matching;
+* substring matching;
+* unmapped round-robin distribution;
+* deduplication;
+* important question limit;
+* practice question limit;
+* zero-section safety.
+
+## Media rendering
+
+Test invalid or absent image URLs safely.
+
+## Edge Function invocation
+
+Mock the Supabase invocation and verify:
+
+* correct request body;
+* button disabled during request;
+* query invalidation after success;
+* retry after failure.
+
+---
+
+# 16. Runtime test cases
+
+Test these flows:
+
+## Notes available
+
+1. Open a topic with a published completed AI lecture.
+2. Open Notes.
+3. Confirm book reader appears.
+4. Confirm topic title and contents.
+5. Navigate forward and backward.
+6. Swipe between pages.
+7. Open Contents and jump to a section.
+8. Confirm prose, bullets, callouts and images render.
+9. Confirm important and practice questions render.
+
+## Notes unavailable
+
+1. Open a topic without a published completed lecture.
+2. Confirm a clean empty state.
+3. Confirm there is no crash or infinite loader.
+
+## Malformed presentation
+
+Mock or use test data with:
+
+* no sections;
+* missing narration;
+* invalid visual beats;
+* object values;
+* empty arrays.
+
+The screen must degrade safely.
+
+## Practice question generation
+
+1. Open a section with fewer than 3 practice questions.
+2. Tap Generate Practice Questions.
+3. Confirm loading state.
+4. Confirm only one network call.
+5. Confirm success toast.
+6. Confirm notes query refetches.
+7. Confirm new questions appear.
+
+Do not run this test against production data unless an approved QA topic is provided. Otherwise use mocks or a development/staging topic.
+
+## Reader fallback
+
+1. Enable the legacy-reader preference.
+2. Confirm card reader appears.
+3. Disable it.
+4. Confirm book reader returns.
+
+## PDF
+
+1. Generate PDF.
+2. Confirm file exists.
+3. Confirm topic title and note content are present.
+4. Confirm sharing opens.
+5. Confirm no browser-specific crash.
+
+---
+
+# 17. Acceptance criteria
+
+Do not mark the task complete until all applicable items pass:
+
+* [ ] Notes tab exists in the mobile topic-learning flow
+* [ ] Notes are loaded from the latest published/completed `presentation_json`
+* [ ] Topic linkage uses `ai_assistant_documents.topic_id`
+* [ ] No separate student notes table is created
+* [ ] No personal note editor is introduced
+* [ ] Sections render as a native book-style reader
+* [ ] Phone layout supports one-page navigation
+* [ ] Tablet layout adapts correctly
+* [ ] Previous/Next work
+* [ ] Swipe works
+* [ ] Contents navigation works
+* [ ] Narration is cleaned safely
+* [ ] Markdown is readable
+* [ ] Math renders or degrades safely
+* [ ] Bullets render
+* [ ] Definitions/formulas/equations render
+* [ ] Images render safely
+* [ ] Pagination produces no blank pages
+* [ ] Questions are bucketed by section
+* [ ] Important/practice question limits are applied
+* [ ] Unmapped questions distribute safely
+* [ ] Card reader fallback works
+* [ ] Reader preference persists
+* [ ] Practice-question generation calls the existing Edge Function
+* [ ] No AI/service-role secrets exist in the client
+* [ ] React Query refetches after generation
+* [ ] Generated questions appear after refetch
+* [ ] Loading, empty, error and retry states work
+* [ ] PDF/share works or is honestly reported as blocked
+* [ ] Existing V4 player remains unaffected
+* [ ] Existing topic navigation remains unaffected
+* [ ] No new TypeScript errors exist in modified files
+* [ ] Tests pass
+
+---
+
+# 18. Required completion report
+
+Do not respond only with “completed.”
+
+Provide:
+
+1. Exact files created.
+2. Exact files modified.
+3. Existing components/services reused.
+4. Database query used to resolve topic notes.
+5. How the latest published job is selected.
+6. How `presentation_json.sections` is parsed.
+7. How pagination works.
+8. How questions are mapped to sections.
+9. How Markdown and math are rendered.
+10. How the card-reader fallback is enabled.
+11. How question generation invokes the Edge Function.
+12. Confirmation that no private keys were added.
+13. Test commands and complete results.
+14. TypeScript results for modified files.
+15. Runtime screenshots or exact steps tested.
+16. Any blocked item.
+17. Whether the feature is ready for independent Codex QA.
+
+Do not claim that the feature fully matches Lovable unless the data flow, reader, questions, native PDF/share and runtime tests have actually been verified.
+
+
+Enhance the SimpleLecture mobile Notes book reader with a premium, natural, human-like page-flip animation.
+
+This is a React Native/Expo mobile application. The Notes feature already converts `presentation_json.sections` into an array of note pages. Your task is to improve only the visual page-turning experience.
+
+Do not redesign or replace the Notes data architecture.
+
+# Primary objective
+
+Create a highly polished book-reading experience where turning a page feels like physically turning a real sheet of paper.
+
+The animation must be:
+
+* extremely smooth;
+* responsive to the learner’s finger;
+* natural and physically believable;
+* attractive and premium;
+* usable on Android and iOS;
+* responsive on phones and tablets;
+* stable with Markdown, formulas, images and questions;
+* free from flashing, blank frames, duplicated pages or gesture glitches.
+
+The learner should be able to drag the page with their finger, see the page bend/rotate naturally, release it, and have it either complete the page turn or return smoothly to its original position.
+
+---
+
+# Critical safety rules
+
+Before editing:
+
+1. Create a Replit checkpoint or Git commit.
+2. Inspect the current Notes reader implementation and installed dependencies.
+3. Identify the current page array, page index state, pager, gesture system and responsive layout.
+4. List the exact files you intend to modify.
+5. Reuse existing page content and pagination logic.
+6. Do not modify:
+
+   * Supabase queries;
+   * `useTopicNotes`;
+   * `presentation_json` parsing;
+   * question generation;
+   * database tables;
+   * Edge Functions;
+   * authentication;
+   * enrolment;
+   * V3/V4 video players;
+   * PDF content generation;
+   * course progress.
+7. Do not introduce a WebView-based book reader.
+8. Do not use browser-only libraries such as:
+
+   * `turn.js`;
+   * `react-pageflip`;
+   * CSS 3D page-flip libraries;
+   * DOM APIs;
+   * `window` animation logic.
+9. Do not install a large native animation dependency before checking whether compatible libraries already exist.
+10. Do not replace the working Notes reader until the new animation passes runtime tests.
+11. Keep a simple non-animated fallback available if the device cannot run the advanced animation safely.
+
+---
+
+# 1. Inspect existing animation dependencies
+
+Check `package.json` and the Expo SDK version.
+
+Prefer the application’s existing libraries.
+
+Recommended priority:
+
+1. `react-native-reanimated`
+2. `react-native-gesture-handler`
+3. Existing pager/FlatList implementation
+4. `@shopify/react-native-skia` only if it is already installed and compatible
+
+Do not automatically install Skia.
+
+If Reanimated and Gesture Handler already exist, use them.
+
+If Skia already exists, it may be used to enhance page curvature, clipping, gradients and shadows.
+
+If Skia is not installed, create a high-quality Reanimated 3D page-turn using native transforms, layered page faces, perspective, dynamic shadows and edge highlights.
+
+The feature must not depend on Skia to function.
+
+---
+
+# 2. Component architecture
+
+Create or refactor a focused animation component, following the project’s conventions, such as:
+
+```text
+src/components/learning/notes/AnimatedBookPager.tsx
+src/components/learning/notes/AnimatedBookPage.tsx
+src/components/learning/notes/usePageFlipGesture.ts
+```
+
+Do not create duplicate files if equivalent components already exist.
+
+The animation component should receive data through props and must not fetch notes itself.
+
+Suggested interface:
+
+```typescript
+interface AnimatedBookPagerProps {
+  pages: NotePage[];
+  currentPageIndex: number;
+  onPageIndexChange: (index: number) => void;
+  renderPage: (page: NotePage, index: number) => React.ReactNode;
+  layoutMode: 'phone' | 'tablet' | 'spread';
+  reducedMotion?: boolean;
+}
+```
+
+The notes reader remains responsible for:
+
+* title;
+* Contents;
+* PDF/share;
+* page indicator;
+* Previous/Next buttons;
+* empty/error states.
+
+The animated pager is responsible only for:
+
+* rendering the relevant pages;
+* handling page-turn gestures;
+* animating the flip;
+* reporting the final page index.
+
+---
+
+# 3. Natural interaction requirements
+
+## Next page
+
+For a forward page turn:
+
+1. The current page begins at its normal flat position.
+2. The learner swipes or drags from right to left.
+3. The page visually lifts from the outer right edge.
+4. The right edge follows the finger.
+5. The page rotates and bends toward the book spine.
+6. A moving shadow appears beneath the turning page.
+7. The reverse side of the sheet becomes visible after the midpoint.
+8. The next page is visible underneath.
+9. Releasing after the completion threshold finishes the page turn.
+10. Releasing before the threshold returns the page naturally.
+
+## Previous page
+
+For a backward page turn:
+
+1. The previous page appears from the left side.
+2. The learner drags from left to right.
+3. The page follows the finger.
+4. Shadows and highlights reverse direction correctly.
+5. The page either completes or settles back based on progress and velocity.
+
+## Gesture expectations
+
+Support:
+
+* slow drag;
+* quick swipe;
+* interrupted drag;
+* release before halfway;
+* release after halfway;
+* velocity-based completion;
+* Previous and Next buttons;
+* programmatic page jump from Contents.
+
+The animation must follow the finger continuously. It must not wait until the gesture ends before starting.
+
+---
+
+# 4. Gesture recognition
+
+Use Gesture Handler and Reanimated worklets where available.
+
+The page flip must distinguish horizontal page-turn intent from vertical content scrolling.
+
+Recommended intent detection:
+
+```typescript
+const isHorizontalIntent =
+  Math.abs(translationX) > Math.abs(translationY) * 1.2;
+```
+
+Do not begin a page flip for a mostly vertical gesture.
+
+Use a small activation threshold so normal taps are not treated as page turns.
+
+Suggested range:
+
+```typescript
+const ACTIVE_OFFSET_X = 12;
+const FAIL_OFFSET_Y = 18;
+```
+
+Adapt these values after testing.
+
+## Vertical scrolling conflict
+
+Note pages may contain long content inside a vertical `ScrollView`.
+
+Requirements:
+
+* vertical scrolling must continue to work normally;
+* diagonal gestures must not accidentally flip pages;
+* a horizontal gesture must intentionally claim the page turn;
+* vertical scroll position must not reset unexpectedly;
+* the page must not flip while the learner is actively scrolling vertically.
+
+Use Gesture Handler relationships such as:
+
+* simultaneous gestures;
+* race gestures;
+* manual activation;
+* directional thresholds;
+
+depending on the existing architecture.
+
+Do not solve this by disabling vertical scrolling.
+
+---
+
+# 5. Animation progress model
+
+Use a shared animation value:
+
+```typescript
+const flipProgress = useSharedValue(0);
+```
+
+Interpretation:
+
+```text
+0 = page is fully flat
+1 = page turn is fully completed
+```
+
+For backward movement, either use:
+
+```text
+0 → 1 with a separate direction value
+```
+
+or a signed progress model if it remains readable and stable.
+
+Clamp progress strictly between 0 and 1.
+
+The gesture should update progress according to page width:
+
+```typescript
+flipProgress.value = clamp(
+  Math.abs(translationX) / pageWidth,
+  0,
+  1
+);
+```
+
+The exact transform must be direction-aware.
+
+Do not update React state on every gesture frame.
+
+Use Reanimated shared values during movement.
+
+Call `onPageIndexChange` only after a page turn successfully completes.
+
+---
+
+# 6. Completion physics
+
+A page turn should complete when either:
+
+* drag progress passes an appropriate threshold; or
+* release velocity strongly indicates the intended direction.
+
+Suggested starting values:
+
+```typescript
+const COMPLETION_PROGRESS = 0.35;
+const COMPLETION_VELOCITY = 650;
+```
+
+Tune these based on real device testing.
+
+## Completed turn
+
+Animate to `1` using a natural timing or spring.
+
+Suggested duration range:
+
+```text
+260–420 milliseconds
+```
+
+The duration may be shorter when release velocity is high.
+
+After completion:
+
+1. update the page index;
+2. reset the shared progress;
+3. prepare the next adjacent pages;
+4. restore gesture input.
+
+## Cancelled turn
+
+Animate back to `0` using a soft spring.
+
+Avoid:
+
+* excessive bounce;
+* elastic overshoot;
+* slow floating;
+* sudden snapping.
+
+Suggested spring behaviour:
+
+```typescript
+withSpring(0, {
+  damping: 22,
+  stiffness: 220,
+  mass: 0.8,
+  overshootClamping: true,
+});
+```
+
+Treat these values as starting points and tune them visually.
+
+---
+
+# 7. Realistic visual construction
+
+The page flip should not look like a simple carousel slide.
+
+Use a layered book-page structure:
+
+```text
+Book background
+Underlying destination page
+Static opposite page, on tablet spread
+Turning page front face
+Turning page rear face
+Dynamic fold shadow
+Dynamic cast shadow
+Page-edge highlight
+Book-spine shadow
+```
+
+## Perspective
+
+Use realistic 3D perspective:
+
+```typescript
+transform: [
+  { perspective: 1200 },
+  { translateX: ... },
+  { rotateY: ... },
+  { translateX: ... },
+]
+```
+
+Tune perspective by device width.
+
+Suggested range:
+
+```text
+900–1600
+```
+
+The rotation origin must feel like the page is turning around the book spine, not around its centre.
+
+React Native does not provide a direct transform-origin API on every target, so emulate the origin through paired `translateX` operations.
+
+## Front and rear faces
+
+Use two layered page faces:
+
+* front face: the current page;
+* rear face: the appropriate reverse/destination content or a paper-toned back surface.
+
+Set:
+
+```typescript
+backfaceVisibility: 'hidden'
+```
+
+Ensure the back content is not accidentally mirrored.
+
+At the midpoint, visibility must transition cleanly with no flicker.
+
+## Page curvature
+
+When Skia is already available, use it only to enhance:
+
+* curved page clipping;
+* curl gradient;
+* moving fold;
+* page deformation;
+* realistic shadow.
+
+When Skia is unavailable, simulate curvature using 3–5 narrow vertical page segments.
+
+Each segment may rotate by a slightly different amount based on:
+
+* flip progress;
+* distance from the outer edge;
+* distance from the spine.
+
+This creates a progressive bend rather than one rigid rectangular rotation.
+
+Do not create too many segments, because Markdown and image content must not be rendered repeatedly in every segment.
+
+A safe fallback is:
+
+* one content snapshot/layer;
+* one or two overlay gradients;
+* 3D rotation;
+* edge distortion;
+* dynamic shadow.
+
+Prioritize stability over unnecessary complexity.
+
+---
+
+# 8. Shadows and lighting
+
+Use dynamic lighting to make the page feel physical.
+
+Include:
+
+## Cast shadow
+
+A soft shadow beneath the turning page.
+
+It should:
+
+* become stronger early in the turn;
+* move toward the spine;
+* soften near completion;
+* reverse correctly for backward turns.
+
+## Fold shadow
+
+A narrow darker band near the fold.
+
+Its position must follow the animated fold.
+
+## Edge highlight
+
+Add a subtle bright highlight along the curved outer edge.
+
+## Spine shadow
+
+Add a persistent subtle shadow near the centre/spine of the book.
+
+Avoid:
+
+* pure black heavy shadows;
+* extreme blur;
+* excessive opacity;
+* neon effects;
+* shadows that remain after the page settles.
+
+All lighting must match the existing Notes theme.
+
+---
+
+# 9. Paper appearance
+
+Create a premium paper feel without harming readability.
+
+Use existing theme tokens when available.
+
+Suggested visual treatment:
+
+* warm off-white page;
+* extremely subtle paper gradient;
+* soft page border;
+* rounded outer corners;
+* low-intensity texture only if it is lightweight;
+* readable dark ink;
+* distinct but restrained callout colours.
+
+Do not use a large raster texture on every page.
+
+Do not reduce text contrast.
+
+Do not place animation overlays above interactive content when the page is idle.
+
+---
+
+# 10. Phone layout
+
+On phones:
+
+* display one page at a time;
+* the page should use nearly the full available width;
+* preserve safe-area padding;
+* allow vertical content scrolling;
+* horizontal swipe flips the page;
+* show page count clearly;
+* keep Previous and Next buttons accessible;
+* avoid tiny text.
+
+Forward turns should visually originate from the right edge.
+
+Backward turns should visually originate from the left edge.
+
+At the first page, backward dragging should show subtle resistance but must not reveal a blank page.
+
+At the last page, forward dragging should show subtle resistance but must not reveal a blank page.
+
+Do not loop from the last page to the first unless the product already requires looping.
+
+---
+
+# 11. Tablet and two-page spread
+
+On larger tablets:
+
+* display a realistic left/right two-page spread where space permits;
+* add a centre gutter/spine;
+* preserve correct logical page order;
+* flip the right page toward the left when moving forward;
+* reveal the next spread beneath;
+* flip the left page toward the right when moving backward.
+
+Do not render the same page on both sides.
+
+Correctly handle:
+
+* odd number of pages;
+* first cover/page;
+* final unpaired page;
+* orientation change;
+* split-screen resizing.
+
+When the layout changes between phone and tablet, preserve the learner’s nearest logical page rather than resetting to page one.
+
+---
+
+# 12. Adjacent-page rendering
+
+For performance, mount only the pages needed for the current interaction:
+
+* previous page/spread;
+* current page/spread;
+* next page/spread;
+* active turning layer.
+
+Do not render every note page simultaneously.
+
+Preload adjacent images where the existing image system supports it.
+
+The underlying next page must already be visible before the top page begins turning so no blank flash appears.
+
+Use stable page keys.
+
+Do not recreate heavy Markdown trees on every animation frame.
+
+Memoize page content where appropriate.
+
+---
+
+# 13. Interaction locking
+
+While a page is settling:
+
+* prevent another page-turn gesture;
+* prevent double index updates;
+* prevent Previous/Next button spam;
+* prevent Contents jumps from corrupting the state;
+* keep the UI responsive.
+
+After completion or cancellation, unlock interaction.
+
+Never leave the pager permanently locked if an animation is interrupted or a component unmounts.
+
+Cancel active animations safely on unmount.
+
+---
+
+# 14. Buttons and programmatic navigation
+
+Previous and Next buttons must trigger the same animation as a gesture.
+
+Do not instantly replace the page when these buttons are pressed.
+
+Contents navigation may use:
+
+* a shorter page-turn animation for nearby pages;
+* a controlled crossfade for distant jumps;
+* an immediate jump only when reduced motion is enabled.
+
+Do not animate through every intermediate page when jumping from page 2 to page 40.
+
+After a Contents jump, the page index and page indicator must remain correct.
+
+---
+
+# 15. Accessibility and reduced motion
+
+Respect the platform’s reduced-motion preference.
+
+When reduced motion is enabled:
+
+* disable the 3D flip;
+* use a short fade or immediate page replacement;
+* keep navigation fully functional.
+
+Add accessible labels for:
+
+* Previous page;
+* Next page;
+* current page number;
+* Contents;
+* page content.
+
+Do not make swipe the only navigation method.
+
+Maintain touch targets of approximately 44×44 points or larger.
+
+Do not use animation that makes text unreadable for prolonged periods.
+
+---
+
+# 16. Performance requirements
+
+Target smooth rendering on normal mid-range Android devices.
+
+The animation should aim for:
+
+```text
+60 FPS on supported devices
+```
+
+Requirements:
+
+* run gesture and transform work on the UI thread;
+* avoid React state changes during every animation frame;
+* avoid JS timers for the flip;
+* avoid repeated JSON parsing;
+* avoid repeated pagination during a flip;
+* avoid rendering all pages;
+* avoid large shadow bitmaps;
+* avoid console logging per frame;
+* avoid unnecessary layout measurements;
+* cache page dimensions;
+* use `runOnJS` only when committing the final page index or announcing accessibility changes.
+
+Test with pages containing:
+
+* long narration;
+* Markdown;
+* formulas;
+* images;
+* bullets;
+* questions.
+
+The animation must remain smooth when the page content is complex.
+
+---
+
+# 17. Orientation and responsive behaviour
+
+Handle:
+
+* portrait;
+* landscape;
+* phone;
+* tablet;
+* split screen;
+* dynamic dimensions;
+* font scaling.
+
+When dimensions change:
+
+1. finish or cancel any active flip safely;
+2. recalculate the page width;
+3. preserve the logical current page;
+4. reset animation transforms;
+5. prevent a blank intermediate state.
+
+Do not hardcode a single screen size.
+
+---
+
+# 18. Error resilience
+
+The page flip must not crash when:
+
+* pages array is empty;
+* there is only one page;
+* current page index is invalid;
+* an image fails;
+* Markdown rendering fails;
+* orientation changes during a flip;
+* the component unmounts during an animation;
+* the learner rapidly presses Next;
+* the learner reverses drag direction;
+* the learner starts a vertical scroll;
+* reduced motion changes.
+
+Clamp all page indexes.
+
+Show the existing Notes empty/error state when no pages exist.
+
+---
+
+# 19. Animation configuration
+
+Create centralized animation constants, for example:
+
+```typescript
+export const PAGE_FLIP_CONFIG = {
+  perspective: 1200,
+  completionProgress: 0.35,
+  completionVelocity: 650,
+  minimumDuration: 260,
+  maximumDuration: 420,
+  shadowMaxOpacity: 0.28,
+  edgeHighlightMaxOpacity: 0.18,
+  gestureActivationDistance: 12,
+};
+```
+
+Do not scatter magic numbers across components.
+
+Tune these values on a real Android device or emulator.
+
+---
+
+# 20. Testing requirements
+
+Add focused tests where practical.
+
+## Pure logic tests
+
+Test:
+
+* next index calculation;
+* previous index calculation;
+* first-page boundary;
+* last-page boundary;
+* tablet spread indexes;
+* odd page count;
+* layout-mode conversion;
+* progress clamping;
+* gesture completion threshold;
+* velocity completion;
+* cancellation.
+
+## Component/interaction tests
+
+Test:
+
+* Next button changes one page;
+* Previous button changes one page;
+* repeated button taps do not skip pages;
+* cancelled gesture retains index;
+* completed gesture updates index once;
+* empty pages do not crash;
+* one-page notes do not allow invalid turns;
+* reduced motion fallback works;
+* Contents jump updates the index.
+
+## Manual runtime tests
+
+Test on Android and, when available, iOS:
+
+1. Slow forward drag.
+2. Fast forward swipe.
+3. Cancelled forward drag.
+4. Slow backward drag.
+5. Fast backward swipe.
+6. Cancelled backward drag.
+7. Vertical scrolling.
+8. Diagonal gesture.
+9. Previous/Next buttons.
+10. Contents jump.
+11. First-page boundary.
+12. Last-page boundary.
+13. Page containing an image.
+14. Page containing a formula.
+15. Long page with vertical scrolling.
+16. Phone portrait.
+17. Phone landscape.
+18. Tablet spread.
+19. Orientation change during the reader.
+20. Rapid repeated input.
+21. Reduced-motion mode.
+22. Background and resume.
+
+Watch for:
+
+* white flashes;
+* black frames;
+* mirrored text;
+* duplicate pages;
+* missing page content;
+* wrong page order;
+* shadow remaining after completion;
+* stuck gestures;
+* duplicate index changes;
+* accidental page turns during vertical scrolling;
+* frame drops;
+* memory warnings.
+
+---
+
+# 21. Acceptance criteria
+
+Do not mark this task complete until all applicable items pass:
+
+* [ ] Page follows the learner’s finger
+* [ ] Slow dragging is interactive
+* [ ] Fast swiping works
+* [ ] Releasing early returns the page naturally
+* [ ] Releasing after threshold completes the turn
+* [ ] Forward and backward animations are directionally correct
+* [ ] Page rotates around the correct spine/edge
+* [ ] Next page is visible underneath
+* [ ] Rear page face does not show mirrored text
+* [ ] Dynamic fold/cast shadow works
+* [ ] Edge highlight works
+* [ ] No blank frame appears
+* [ ] No duplicate page appears
+* [ ] No duplicate index update occurs
+* [ ] Vertical scrolling remains functional
+* [ ] Diagonal gestures do not accidentally flip
+* [ ] Previous and Next use the page-turn animation
+* [ ] Contents navigation stays synchronized
+* [ ] First/last boundaries are safe
+* [ ] Phone layout works
+* [ ] Tablet spread works
+* [ ] Orientation changes are safe
+* [ ] Markdown content remains readable
+* [ ] Math content remains readable
+* [ ] Images remain stable
+* [ ] Questions remain interactive when the page is idle
+* [ ] Reduced-motion fallback works
+* [ ] Only adjacent pages are mounted
+* [ ] No per-frame React state update occurs
+* [ ] Existing Notes data flow remains unchanged
+* [ ] Existing practice-question generation remains unchanged
+* [ ] PDF/share remains functional
+* [ ] V4 player remains unaffected
+* [ ] No new TypeScript errors exist in modified files
+* [ ] Tests pass
+* [ ] Runtime testing has been completed on at least one Android target
+
+---
+
+# 22. Required completion response
+
+Do not respond only with “completed.”
+
+Provide:
+
+1. Exact files created.
+2. Exact files modified.
+3. Animation libraries reused.
+4. Any dependency added and why it was necessary.
+5. Whether Skia was used or whether the Reanimated fallback was used.
+6. How the gesture distinguishes vertical scrolling from horizontal page turning.
+7. How page progress is calculated.
+8. Completion and cancellation thresholds.
+9. How the front and rear page faces are rendered.
+10. How shadows and edge highlights are generated.
+11. How phone and tablet layouts differ.
+12. How adjacent-page rendering is optimized.
+13. How reduced motion is handled.
+14. Test commands and results.
+15. TypeScript results for modified files.
+16. Android runtime test results.
+17. Screenshots or a short screen recording showing:
+
+    * slow drag;
+    * completed turn;
+    * cancelled turn;
+    * backward turn;
+    * tablet spread if available.
+18. Any blocked or incomplete item.
+19. Whether the animation is ready for independent Codex QA.
+
+Do not claim the animation is perfectly smooth or production-ready unless it has been tested on an actual Android device or emulator with complex note pages.

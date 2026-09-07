@@ -1,0 +1,184 @@
+# Doubts Tab — API Contract & UI Rendering Spec (for Replit / Mobile App)
+
+Goal: give Replit everything needed to reproduce the web Doubts tab on mobile — the exact endpoint, request payload, response shape, and how each field of the response is rendered.
+
+---
+
+## 1. Endpoint
+
+**Upstream (real server, plain HTTP):**
+```
+POST http://116.202.230.124:8000/ai-text-answer
+Content-Type: application/json
+X-API-Key: <secret>            # header name is X-API-Key, value stored server-side
+```
+
+**Web app goes through a Supabase edge-function proxy** to bridge HTTPS→HTTP and hide the key:
+```
+POST https://oxwhqvsoelqqsblmqkxx.supabase.co/functions/v1/ai-text-answer-proxy
+```
+Files: `supabase/functions/ai-text-answer-proxy/index.ts`, client `src/lib/api/aiTextAnswer.ts`.
+
+**Mobile app options:**
+- **Recommended:** call the same Supabase proxy — no key on device, same TLS, matches web behavior.
+- **Direct:** call `http://116.202.230.124:8000/ai-text-answer` with the `X-API-Key` header. Requires cleartext HTTP allow-list (Android `usesCleartextTraffic="true"` for that host; iOS `NSAppTransportSecurity` exception) and secure key storage. Prefer the proxy.
+
+Timeouts: server can take up to ~30 s (edge proxy has a 30 s abort). Set the mobile HTTP client timeout to ≥45 s.
+
+---
+
+## 2. Request payload
+
+```json
+{
+  "language": "en",
+  "question": "what substance is used to treat acidic soil?",
+  "subjectId": "ceaf73fb-528a-4d4a-947c-4a7be304db2b",
+  "subjectName": "Science"
+}
+```
+
+Rules:
+- `question` (string, trimmed, non-empty) — required.
+- `subjectId` (uuid string) — required. Server uses it to look up the subject's document corpus.
+- `subjectName` (string, optional) — used for logging / prompt context.
+- `language` (string, optional, default `"en"`) — controls response language.
+
+Server returns **400** if `question` or `subjectId` is missing.
+
+---
+
+## 3. Response payload
+
+### 3a. Success (200)
+```jsonc
+{
+  "cached": false,
+  "cache_layer": "l1|l2|none",
+  "cache_id": "abc123",
+  "answer": "Markdown answer with LaTeX like $CaO$ and $$\\text{CaO} + H_2O \\rightarrow ...$$",
+  "key_points": ["Lime (CaO) neutralizes acidity", "..."],
+  "sources": [
+    { "doc_title": "Chapter 2 - Acids & Bases", "section_title": "Neutralization" }
+  ],
+  "is_doc_grounded": true,
+  "slide_preview": {
+    "found": true,
+    "cache_id": "slide_xyz",
+    "similarity": 0.91,
+    "matched_question": "What is used to treat acidic soil?",
+    "presentation_slides": [
+      { "title": "Acidic Soil Treatment", "bullet_points": ["Use lime", "..."], "infographicUrl": "https://..." }
+    ],
+    "slide_audio_urls": {
+      "urls": [
+        { "slideIndex": 0, "audioUrl": "https://.../slide0.mp3", "duration": 7.2 }
+      ]
+    },
+    "image_urls": { "0": { "url": "https://.../img0.png" } },
+    "total_duration_seconds": 42.5
+  },
+  "suggestions": [
+    { "question": "How does lime neutralize soil?", "cache_id": "…", "similarity": 0.88, "has_slides": true }
+  ]
+}
+```
+
+### 3b. Not in course corpus (still 200 in practice)
+```json
+{ "no_content": true, "message": "This question doesn't seem to be part of your course. Please try the Forum for general questions." }
+```
+
+### 3c. Errors
+- `400` — invalid body.
+- `502` — upstream unreachable / timeout.
+- `500` — proxy failure.
+
+Client contract in `src/types/aiTextAnswer.ts` and `src/lib/api/aiTextAnswer.ts` normalizes this into:
+```ts
+type AITextAnswerResult =
+  | { ok: true; data: AITextAnswerData }
+  | { ok: false; reason: "no_content"; message?: string }
+  | { ok: false; reason: "error"; message: string };
+```
+
+---
+
+## 4. How the UI renders each field
+
+Owned by `src/components/learning/DoubtsTab.tsx`. Each assistant message is a card with these blocks, in order:
+
+| Response field | UI block | File | Notes |
+|---|---|---|---|
+| `answer` (markdown + LaTeX) | `<DoubtsMarkdown variant="assistant" />` | `doubts/DoubtsMarkdown.tsx` | Renders with `react-markdown` + `remark-math` + `rehype-katex`. **Any math/chemistry rendering must use this component** to keep `$…$` / `$$…$$` and `\ce{}` correct. |
+| `key_points[]` | `<KeyPointsList items={...} />` | `doubts/KeyPointsList.tsx` | Bulleted highlights under the answer. |
+| `sources[]` | `<SourceChips sources={...} />` | `doubts/SourceChips.tsx` | Small pill chips: "Doc title · Section". Hidden if empty. |
+| `slide_preview` (when `found === true`) | `<SlidePreviewPlayer preview={...} />` | `doubts/SlidePreviewPlayer.tsx` | Mini presentation player: image per slide, `<audio>` for `slide_audio_urls.urls[i].audioUrl`, progress bar, prev/next/play. Auto-advances on `ended`, fallback 6 s timer if no audio for a slide. |
+| `suggestions[]` | `<SuggestionChips items={...} onPick={sendMessage} />` | `doubts/SuggestionChips.tsx` | Renders each chip via `DoubtsMarkdown` so LaTeX in follow-up questions shows correctly. Tap a chip → treated as a new user question. |
+| `no_content: true` | Plain assistant message with `noContent: true` flag | `DoubtsTab.tsx` | Shows the server message or the default "try the Forum" copy. No key_points/sources/slides. |
+| error | `toast.error(message)` + restore the user's input | `DoubtsTab.tsx` (~line 389) | User's typed text is put back into the input so they can retry. |
+
+**Rules the UI enforces:**
+1. Only the *latest* assistant message shows `suggestions` and `slide_preview`. Prior assistant messages are stripped of those fields when a new question is sent (`DoubtsTab.tsx` ~line 336).
+2. User messages render through `DoubtsMarkdown` too (variant `"user"`) so pasted equations look right.
+3. `slide_preview` block is only mounted when `slide_preview?.found === true`. If `found` is false or missing, the block is not shown.
+4. Threads (multi-chat history) are persisted client-side via `doubts/doubtThreadsStore.ts` — mobile can mirror this with a local SQLite/Realm table keyed by `subjectId` + `threadId`.
+
+---
+
+## 5. Client-side flow (what to mirror in mobile)
+
+```
+User taps Send / Enter
+  → strip suggestions/slide_preview from prior assistant messages
+  → append user message
+  → POST /ai-text-answer-proxy   { language, question, subjectId, subjectName }
+  → parse result:
+       no_content   → append assistant message with noContent flag
+       error        → toast + restore input text
+       success      → append assistant message with:
+                        content       = data.answer
+                        keyPoints     = data.key_points ?? []
+                        sources       = data.sources ?? []
+                        slidePreview  = data.slide_preview?.found ? data.slide_preview : null
+                        suggestions   = data.suggestions ?? []
+                        isDocGrounded = !!data.is_doc_grounded
+  → render blocks in the order listed in Section 4
+```
+
+Send button is disabled while a request is in flight (`isLoading`). Voice input, when enabled, is auto-stopped at send.
+
+---
+
+## 6. Curl reference
+
+Via the Supabase proxy (recommended — no API key on device):
+```bash
+curl -X POST https://oxwhqvsoelqqsblmqkxx.supabase.co/functions/v1/ai-text-answer-proxy \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <SUPABASE_ANON_KEY>" \
+  -d '{"language":"en","question":"what substance treats acidic soil?","subjectId":"ceaf73fb-528a-4d4a-947c-4a7be304db2b","subjectName":"Science"}'
+```
+
+Direct to upstream (only if the mobile app must bypass the proxy):
+```bash
+curl -X POST http://116.202.230.124:8000/ai-text-answer \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <API_KEY>" \
+  -d '{"language":"en","question":"what substance treats acidic soil?","subjectId":"ceaf73fb-528a-4d4a-947c-4a7be304db2b","subjectName":"Science"}'
+```
+
+---
+
+## 7. Mobile checklist for Replit
+
+1. HTTP client with 45 s timeout, JSON in/out.
+2. Use the Supabase proxy URL + anon key; keep upstream key off the device.
+3. Types matching `src/types/aiTextAnswer.ts`.
+4. Markdown + math renderer (Android: Markwon + JLatexMath; iOS: Down + iosMath; RN: react-native-markdown-display + react-native-mathjax). This is non-negotiable — chemistry (`$CaO$`, `\ce{}`) must render like the web.
+5. Slide preview player with per-slide `<audio>` (or `AVPlayer` / `MediaPlayer`), progress bar computed as `(elapsedBeforeCurrentSlide + currentAudioTime) / total_duration_seconds`, auto-advance on `ended`, and 6 s fallback timer if a slide has no audio.
+6. Suggestion chips call the same send-message function when tapped.
+7. Only the last assistant message shows suggestions/slide-preview; strip those from previous messages when sending a new question.
+8. Handle `no_content` as a normal assistant reply, not an error.
+
+If approved, I will append this spec to `.lovable/plan.md` next to the Educational Player and V4 Marketing Player specs so Replit has one source of truth.

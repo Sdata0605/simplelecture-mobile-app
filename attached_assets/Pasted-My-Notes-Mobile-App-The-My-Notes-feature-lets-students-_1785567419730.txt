@@ -1,0 +1,202 @@
+My Notes Mobile App
+The My Notes feature lets students write notes while watching lectures and later browse/edit them by:
+Course → Subject → Chapter → Notes
+Use the existing Supabase project and authenticated student session. All notes are protected by RLS, so students can only access their own notes.
+Navigation
+Add My Notes to the authenticated mobile sidebar and bottom navigation.
+Mobile screens:
+/my-notes
+/my-notes/:courseId
+/my-notes/:courseId/:subjectId
+Native mobile equivalents can be:
+MyNotesCoursesScreen
+MyNotesSubjectsScreen
+MyNotesChapterScreen
+Screen 1: Course Notebooks
+Show only courses in which the current student is enrolled.
+Endpoint
+POST /rest/v1/rpc/get_enrolled_courses_with_progress
+Authorization: Bearer <student_access_token>
+apikey: <supabase_anon_key>
+Content-Type: application/json
+Payload:
+{
+  "p_student_id": "<authenticated_user_id>"
+}
+Response used:
+[
+  {
+    "course_id": "4c10bc8e-acbc-4b76-b7f5-54376c030cb0",
+    "course_name": "Class 10 (SSLC - Karnataka)",
+    "course_slug": "class-10-sslc-karnataka",
+    "thumbnail_url": "https://...",
+    "short_description": "Course description",
+    "duration_months": 12,
+    "enrolled_at": "2026-01-01T10:00:00Z",
+    "progress": 35,
+    "category_id": "...",
+    "category_name": "...",
+    "parent_category_id": "...",
+    "parent_category_name": "School Education",
+    "parent_category_icon": "..."
+  }
+]
+UI
+Show:
+Page title: Every idea, in one place
+Number of course notebooks
+Course thumbnail
+Course name and description
+Course progress
+Duration
+“Open notes” action
+Loading skeletons
+Empty state with “Browse courses”
+Tapping a course opens the subject screen.
+Screen 2: Subject Notebooks
+Subjects endpoint
+GET /rest/v1/course_subjects?select=*,subject:popular_subjects(*)&course_id=eq.<courseId>&order=display_order
+Relevant response:
+[
+  {
+    "id": "<course_subject_id>",
+    "course_id": "<course_id>",
+    "subject_id": "ceaf73fb-528a-4d4a-947c-4a7be304db2b",
+    "display_order": 1,
+    "subject": {
+      "id": "ceaf73fb-528a-4d4a-947c-4a7be304db2b",
+      "name": "Science",
+      "thumbnail_url": "https://..."
+    }
+  }
+]
+Note-count endpoint
+GET /rest/v1/student_lecture_notes?select=subject_id&student_id=eq.<userId>&subject_id=in.(<subjectIds>)
+Response:
+[
+  {
+    "subject_id": "ceaf73fb-528a-4d4a-947c-4a7be304db2b"
+  }
+]
+Count rows locally for each subject_id.
+UI
+Each subject card shows:
+Subject thumbnail
+Subject name
+“Fresh notebook” when count is zero
+Otherwise, for example, “5 notes”
+“Notes synced” status
+“Open notebook” action
+Tapping a subject opens its chapter notebook.
+Screen 3: Chapter Notebook
+Chapters endpoint
+GET /rest/v1/subject_chapters?select=id,subject_id,chapter_number,title,sequence_order,description&subject_id=eq.<subjectId>&order=chapter_number.asc
+Response:
+[
+  {
+    "id": "<chapter_id>",
+    "subject_id": "<subject_id>",
+    "chapter_number": 1,
+    "title": "Chemical Reactions and Equations",
+    "sequence_order": 1,
+    "description": null
+  }
+]
+Load aggregate chapter note
+Generate:
+job_id = notebook-{subjectId}-{chapterId}
+Request:
+GET /rest/v1/student_lecture_notes?select=content,updated_at&student_id=eq.<userId>&job_id=eq.notebook-<subjectId>-<chapterId>&subject_id=eq.<subjectId>&chapter_id=eq.<chapterId>
+Response:
+[
+  {
+    "content": "Topic: Chemical Equations\n\n\nMy written notes...",
+    "updated_at": "2026-07-31T12:30:00Z"
+  }
+]
+Load lecture/topic notes
+GET /rest/v1/student_lecture_notes?select=content,topic_id,updated_at&student_id=eq.<userId>&subject_id=eq.<subjectId>&chapter_id=eq.<chapterId>&topic_id=not.is.null&order=updated_at.asc
+Response:
+[
+  {
+    "content": "A chemical equation represents a reaction...",
+    "topic_id": "<topic_id>",
+    "updated_at": "2026-07-31T12:20:00Z"
+  }
+]
+Fetch topic names:
+GET /rest/v1/subject_topics?select=id,title&id=in.(<topicIds>)
+Response:
+[
+  {
+    "id": "<topic_id>",
+    "title": "Chemical Equations"
+  }
+]
+Display combined content as:
+Topic: Chemical Equations
+
+
+A chemical equation represents a reaction...
+If topic notes are newer than the aggregate chapter note, rebuild the chapter notebook and save it again.
+Save Notes
+Autosave 450 ms after the student stops typing.
+POST /rest/v1/student_lecture_notes?on_conflict=student_id,job_id,subject_id,chapter_id,topic_id
+Prefer: resolution=merge-duplicates
+Payload:
+{
+  "student_id": "<authenticated_user_id>",
+  "job_id": "notebook-<subjectId>-<chapterId>",
+  "subject_id": "<subjectId>",
+  "chapter_id": "<chapterId>",
+  "topic_id": null,
+  "content": "Complete notebook text"
+}
+Successful Supabase upsert normally returns an empty response unless representation is requested. Show these UI states:
+Loading saved notes...
+Saving to your account...
+Saved
+Saved locally - cloud sync will retry
+Also save locally on the device using a key equivalent to:
+simplelecture:my-notes:{userId}:{subjectId}:{chapterId}
+Clear Page
+Clear all aggregate and topic notes for the selected chapter:
+DELETE /rest/v1/student_lecture_notes?student_id=eq.<userId>&subject_id=eq.<subjectId>&chapter_id=eq.<chapterId>
+After success:
+Clear editor text
+Remove locally cached content
+Refresh subject note counts
+Show Saved
+Notes From Lecture Player
+The lecture player saves notes to the same table with the real lecture job and topic:
+{
+  "student_id": "<userId>",
+  "job_id": "<external_video_job_id>",
+  "subject_id": "<subjectId>",
+  "chapter_id": "<chapterId>",
+  "topic_id": "<topicId>",
+  "content": "Student's lecture notes"
+}
+Use the same 450 ms autosave. Enable native:
+spellCheck = true
+autoCorrect = on
+autoCapitalize = sentences
+Subscribe to Supabase Realtime changes on student_lecture_notes, filtered by the current student_id, to synchronize notes across devices.
+Chapter Notebook UI
+The mobile notebook screen should include:
+Back button to subject notebooks
+Subject and course name
+Horizontally scrollable chapter chips
+Selected chapter title
+Fullscreen button
+Notebook-paper styling with ruled lines
+Large editable handwriting-style textarea
+Word count
+Autosave status
+Clear-page button
+Previous and next chapter buttons
+Current chapter indicator such as 1 of 13
+Fixed mobile bottom navigation
+The database table is student_lecture_notes, with unique context:
+student_id + job_id + subject_id + chapter_id + topic_id
+Do not build a separate backend API for notes. Use the authenticated Supabase REST/RPC and Realtime APIs directly.

@@ -1,0 +1,579 @@
+You previously reported that the SimpleLecture V4 migration was complete, but an independent Codex audit of the current source code has confirmed that the required fixes are still not present.
+
+Do not rely on your previous completion message. Inspect the current repository and implement the following corrections directly in the existing codebase.
+
+This is a React Native/Expo mobile application. The verified Lovable website at https://simplelecturelatest.lovable.app/ is the functional reference only. Do not modify the Lovable website, Supabase schema, Edge Functions, production data, authentication architecture, enrolment logic, or unrelated screens.
+
+## Confirmed current defects
+
+The independent audit confirmed:
+
+1. `src/services/v4PlayerService.ts` still calls `v3-player-proxy`.
+2. `src/lib/playerSelection.ts` still restricts V4 to the D.Pharmacy course.
+3. `src/screens/CoursePreviewScreen.tsx` still routes preview lectures through `AILecturePlayer` and uses `video_url` or derived presentation URLs.
+4. `src/screens/TopicDetailsScreen.tsx` still extracts job IDs from `video_url`, applies the D.Pharmacy gate, and falls back to `AILecturePlayer`.
+5. The learner-facing flow does not currently respect `topic_lecture_visibility`.
+6. The mobile flow is not consistently using top-level `vimeo_mp4_url` and `kannada_vimeo_mp4_url`.
+
+These defects must now be fixed in the actual files.
+
+# Required V4 architecture
+
+The learner-facing AI lecture flow must be:
+
+```text
+course_free_access_chapters
+→ published and completed video_generation_jobs
+→ topic_lecture_visibility
+→ external_job_id
+→ v4-player-proxy
+→ presentation.json
+→ English/Kannada direct MP4 source
+→ one native/custom mobile player
+```
+
+The active learner-facing flow must never depend on:
+
+* `v3-player-proxy`
+* `player_v2`
+* `video_generation_jobs.video_url`
+* parsing a job ID from `video_url`
+* constructing `presentation.json` from `video_url`
+* hardcoded Vimeo URLs or video IDs
+* Vimeo iframe or WebView playback
+* silent fallback to V3
+* a D.Pharmacy-specific course ID
+* duplicate V3 and V4 players
+
+Do not delete legacy files yet. Make them unreachable from the target learner AI lecture flows.
+
+---
+
+# FIX 1 — Correct the V4 proxy
+
+## File
+
+`src/services/v4PlayerService.ts`
+
+Replace the incorrect proxy:
+
+```typescript
+const PROXY_BASE = `${SUPABASE_URL}/functions/v1/v3-player-proxy`;
+```
+
+with:
+
+```typescript
+const PROXY_BASE = `${SUPABASE_URL}/functions/v1/v4-player-proxy`;
+```
+
+The V4 presentation request must resolve to:
+
+```text
+/functions/v1/v4-player-proxy/player/jobs/{jobId}/presentation.json?t={timestamp}
+```
+
+Add a cache-busting timestamp if one is not already present.
+
+The service function should accept a stable `jobId` or `externalJobId`, not a legacy video URL.
+
+---
+
+# FIX 2 — Remove the D.Pharmacy-only gate
+
+## File
+
+`src/lib/playerSelection.ts`
+
+The current logic resembles:
+
+```typescript
+export const DPHARMACY_COURSE_ID = 'e74e8e53-5949-4113-a565-1e84c2b4ee0e';
+
+export function shouldUseV4Player(courseId?: string | null): boolean {
+  return courseId === DPHARMACY_COURSE_ID;
+}
+```
+
+Remove course-ID-based player selection.
+
+The V4 decision must be data-driven:
+
+* Use V4 when a valid `external_job_id` is available.
+* Do not restrict V4 by course ID.
+* Class 10, D.Pharmacy and other V4-ready courses must follow the same V4 path.
+
+You may either:
+
+1. Remove `shouldUseV4Player` from learner-facing call sites, or
+2. Refactor it to check V4-ready lecture data instead of a course ID.
+
+Do not leave dead D.Pharmacy-specific conditions in the active route.
+
+Update any existing tests that currently assert D.Pharmacy-only behaviour because those tests validate obsolete behaviour.
+
+---
+
+# FIX 3 — Refactor the free-preview AI lecture flow
+
+## File
+
+`src/screens/CoursePreviewScreen.tsx`
+
+The preview flow must not use `video_url`, `presentation_json` URL derivation, `ai_generated_video_url`, or `AILecturePlayer` as the active AI lecture playback path.
+
+## Preview chapter access
+
+Use the existing `useCourseFreeAccess` hook or the existing Supabase service to load:
+
+```text
+course_free_access_chapters
+```
+
+A chapter is available for free preview only when its actual `chapter_id` exists in that course’s free-access mappings.
+
+Do not hardcode:
+
+* first three chapters;
+* chapter sequence numbers;
+* a fixed course ID;
+* a fixed topic ID.
+
+The same free-preview entitlement must apply to:
+
+* visitor, when mobile guest navigation is supported;
+* logged-in non-purchased user;
+* enrolled/purchased user.
+
+A preview chapter must not require purchase.
+
+A non-preview chapter must remain locked for visitors and unpaid users.
+
+## Lecture query
+
+Query published and completed lecture jobs for the selected topic.
+
+The required fields must include at minimum:
+
+```text
+id
+document_name
+external_job_id
+is_marketing
+created_at
+ai_assistant_documents(topic_id, chapter_id)
+```
+
+The query must enforce:
+
+```text
+is_published = true
+status = completed
+topic_id = selected topic ID
+```
+
+Do not use `video_url` for player selection or playback.
+
+## Topic lecture visibility
+
+Load:
+
+```text
+topic_lecture_visibility
+```
+
+for the selected topic.
+
+Apply the rules exactly:
+
+```typescript
+function filterLecturesByVisibility(
+  lectures: Lecture[],
+  mode?: string | null,
+): Lecture[] {
+  if (mode === 'hide_marketing') {
+    return lectures.filter((lecture) => lecture.is_marketing !== true);
+  }
+
+  if (mode === 'hide_lecture') {
+    return lectures.filter((lecture) => lecture.is_marketing === true);
+  }
+
+  return lectures;
+}
+```
+
+The lecture must be selected only after visibility filtering.
+
+If filtering leaves no lecture, show a clear “AI lecture unavailable” state.
+
+## Preview navigation
+
+When a preview AI lecture is selected and has `external_job_id`, navigate directly to the V4 player:
+
+```typescript
+navigation.navigate('V4Player', {
+  jobId: lecture.external_job_id,
+  title: lecture.document_name || topicTitle || 'AI Lecture',
+  courseId,
+  chapterId,
+  topicId,
+  isPreview: true,
+});
+```
+
+Use the actual navigation parameter names expected by the existing `V4PlayerScreen`, but the stable value passed to it must be `external_job_id`.
+
+Do not navigate preview AI lectures to `AILecturePlayer`.
+
+Do not derive a job ID or presentation URL from `video_url`.
+
+---
+
+# FIX 4 — Refactor in-course AI lecture playback
+
+## File
+
+`src/screens/TopicDetailsScreen.tsx`
+
+Find every learner-facing AI lecture launch path.
+
+Remove:
+
+* D.Pharmacy course checking;
+* `shouldUseV4Player(courseId)` course gating;
+* job-ID extraction from `video_url`;
+* construction of `presentation.json` from `video_url`;
+* fallback to `AILecturePlayer` for a lecture with a valid `external_job_id`.
+
+The active logic must be:
+
+```typescript
+if (lecture.external_job_id) {
+  navigation.navigate('V4Player', {
+    jobId: lecture.external_job_id,
+    title: lecture.document_name || topicTitle || 'AI Lecture',
+    courseId,
+    chapterId,
+    topicId,
+    isPreview: false,
+  });
+
+  return;
+}
+```
+
+If `external_job_id` is missing, display a clear content-unavailable error.
+
+Do not silently route to V3 or use `video_url`.
+
+Also ensure the lecture list respects `topic_lecture_visibility` before the user can launch a lecture.
+
+Reuse a shared service or helper rather than implementing inconsistent filtering separately in preview and topic screens.
+
+---
+
+# FIX 5 — Use one shared lecture resolver
+
+Create or update a shared service, for example:
+
+`src/services/aiLectureService.ts`
+
+Reuse existing Supabase clients and configuration. Do not create a duplicate Supabase client.
+
+The service should expose typed helpers similar to:
+
+```typescript
+export async function getPublishedAiLectures(
+  topicId: string,
+): Promise<AiLecture[]>;
+
+export async function getTopicLectureVisibility(
+  topicId: string,
+): Promise<string | null>;
+
+export function filterLecturesByVisibility(
+  lectures: AiLecture[],
+  mode?: string | null,
+): AiLecture[];
+
+export async function resolveVisibleAiLectures(
+  topicId: string,
+): Promise<AiLecture[]>;
+```
+
+Both `CoursePreviewScreen` and `TopicDetailsScreen` should use the same shared lecture-resolution rules.
+
+Avoid duplicate or conflicting API logic.
+
+---
+
+# FIX 6 — Correct V4 English/Kannada playback
+
+## Files to inspect
+
+* `src/screens/V4PlayerScreen.tsx`
+* `src/services/v4PlayerService.ts`
+* any custom V4 player component
+
+The V4 presentation response should be the source of truth.
+
+For full merged lecture playback:
+
+```typescript
+const englishUrl = presentation.vimeo_mp4_url;
+const kannadaUrl = presentation.kannada_vimeo_mp4_url;
+```
+
+Implement a typed resolver:
+
+```typescript
+type PlayerLanguage = 'english' | 'kannada';
+
+function resolveV4MediaUrl(
+  presentation: V4Presentation,
+  language: PlayerLanguage,
+): string | null {
+  if (language === 'kannada') {
+    return presentation.kannada_vimeo_mp4_url || null;
+  }
+
+  return presentation.vimeo_mp4_url || null;
+}
+```
+
+Language switching must:
+
+1. Pause the current player.
+2. Stop or unload the old source where required by the current video library.
+3. Replace the actual media source.
+4. Load the selected language source.
+5. Keep only one player instance mounted.
+6. Prevent duplicate audio.
+7. Update the selected language label.
+8. Show an unavailable state if the selected language has no URL.
+9. Never fall back to V3.
+
+When both language URLs are present, show both options.
+
+When only one exists, disable or hide the unavailable option.
+
+When neither exists, show “Video unavailable” with retry support.
+
+Section-level `avatar_languages` may continue to be used for section-specific assets, but it must not replace the top-level full-lecture MP4 source logic.
+
+---
+
+# FIX 7 — Navigation consistency
+
+## File
+
+`src/navigation/AppNavigator.tsx`
+
+Keep the `V4Player` route registered.
+
+You may leave `AILecturePlayer` and `V3Player` registered temporarily if unrelated legacy features still need them, but confirm that the following learner-facing flows no longer navigate to them:
+
+* free-preview AI lecture;
+* topic-details AI lecture;
+* enrolled-course AI lecture;
+* marketing AI lecture;
+* non-marketing AI lecture selected after visibility filtering.
+
+There must be one consistent V4 player route for the target AI lecture functionality.
+
+---
+
+# FIX 8 — Preserve existing functionality
+
+Preserve where applicable:
+
+* watch progress;
+* completion tracking;
+* topic completion;
+* course progress;
+* authentication;
+* purchase/enrolment checks;
+* navigation history;
+* current chapter/topic context;
+* loading states;
+* player fullscreen;
+* app background/resume;
+* existing analytics.
+
+If progress tracking is currently implemented in `AILecturePlayer`, move or reuse the relevant tracking logic in `V4PlayerScreen` rather than continuing to route playback through the legacy screen.
+
+Do not duplicate completion events.
+
+---
+
+# FIX 9 — Type safety and the reported player error
+
+The audit found:
+
+```text
+src/screens/AILecturePlayerScreen.tsx:
+'currentSection' is possibly 'undefined'
+```
+
+Do not dismiss relevant TypeScript errors as pre-existing.
+
+If this screen is still touched by shared logic, add safe narrowing before accessing `currentSection`.
+
+Do not perform a broad unrelated TypeScript cleanup. Ensure all files changed for this task and their direct imports type-check.
+
+---
+
+# REQUIRED VERIFICATION
+
+After implementing the changes, do not merely say “completed.”
+
+Run and provide the exact output of:
+
+```bash
+grep -RIn \
+  --exclude-dir=node_modules \
+  --exclude-dir=.git \
+  --exclude-dir=dist \
+  --exclude-dir=.expo \
+  -E "v3-player-proxy|player_v2|shouldUseV4Player|DPHARMACY_COURSE_ID|video_url|external_job_id|v4-player-proxy|topic_lecture_visibility|course_free_access_chapters|vimeo_mp4_url|kannada_vimeo_mp4_url" \
+  src
+```
+
+Explain every remaining result involving:
+
+* `v3-player-proxy`;
+* `player_v2`;
+* `video_url`;
+* `V3Player`;
+* `AILecturePlayer`.
+
+Run:
+
+```bash
+npm test -- --runInBand
+```
+
+Run:
+
+```bash
+npx tsc --noEmit
+```
+
+Clearly separate:
+
+* new errors caused by this task;
+* errors in modified files;
+* unrelated pre-existing errors.
+
+Confirm the modified files have no new TypeScript errors.
+
+Run the app in the available Replit environment.
+
+If Expo web support is configured, run it and test through the browser.
+
+If Android runtime is available, test the native flow.
+
+Do not install unnecessary dependencies or make unrelated configuration changes.
+
+---
+
+# MANDATORY TEST CASE
+
+Use this Class-10 test data:
+
+```text
+Course:
+Class-10
+4c10bc8e-acbc-4b76-b7f5-54376c030cb0
+
+Chapter:
+Chemical Reactions and Equations
+fb445fdf-67d3-470d-8911-09d1c810fab0
+
+Topic:
+Chemical Equations
+dde10568-3c23-46ae-b96d-3dfc5c33d4df
+
+Reference job when backend data remains unchanged:
+Science_20260702135100912_UXPI4A_52b6ecc7
+
+Reference visibility mode when unchanged:
+hide_lecture
+```
+
+Verify:
+
+1. Class-10 is not blocked by a D.Pharmacy gate.
+2. The chapter is recognised dynamically as free.
+3. The topic’s lecture visibility is fetched.
+4. `hide_lecture` keeps the marketing lecture.
+5. The selected lecture uses `external_job_id`.
+6. Navigation opens `V4Player`.
+7. The player requests:
+
+```text
+/functions/v1/v4-player-proxy/player/jobs/{jobId}/presentation.json
+```
+
+8. English uses `vimeo_mp4_url`.
+9. Kannada uses `kannada_vimeo_mp4_url`.
+10. Switching language changes the actual media source.
+11. No V3 request occurs.
+12. No `video_url` playback occurs.
+13. Exactly one player is mounted.
+14. No duplicate audio occurs.
+
+Also test one additional non-D.Pharmacy course with V4 lecture data.
+
+---
+
+# ACCEPTANCE CRITERIA
+
+Do not mark this task complete until all applicable items pass:
+
+* [ ] `v4PlayerService.ts` uses `v4-player-proxy`
+* [ ] No active V4 request uses `v3-player-proxy`
+* [ ] No D.Pharmacy-only gate exists in the learner flow
+* [ ] Free chapters come from `course_free_access_chapters`
+* [ ] Preview does not hardcode the first three chapters
+* [ ] Published completed lecture jobs are used
+* [ ] `topic_lecture_visibility` is applied
+* [ ] `external_job_id` is the stable V4 identifier
+* [ ] Free preview opens `V4Player`
+* [ ] In-course AI lecture opens `V4Player`
+* [ ] No target flow parses `video_url`
+* [ ] No target flow derives `presentation.json` from `video_url`
+* [ ] No target flow silently falls back to V3
+* [ ] English uses `vimeo_mp4_url`
+* [ ] Kannada uses `kannada_vimeo_mp4_url`
+* [ ] Language switching changes the real source
+* [ ] One player only
+* [ ] No duplicate audio
+* [ ] Missing-language cases are handled
+* [ ] Presentation failure shows retry
+* [ ] Preview content works without purchase
+* [ ] Non-preview content stays protected
+* [ ] Existing progress tracking is preserved
+* [ ] Class-10 test passes
+* [ ] At least one additional course passes
+* [ ] Tests pass or failures are accurately documented
+* [ ] No new TypeScript errors exist in modified files
+
+# REQUIRED COMPLETION RESPONSE
+
+At the end, provide:
+
+1. Every file modified.
+2. A concise explanation of each change.
+3. The exact V4 endpoint now used.
+4. Proof that Class-10 no longer hits the D.Pharmacy gate.
+5. Proof that preview and topic flows pass `external_job_id`.
+6. Proof that no target path uses `video_url`.
+7. Proof that `topic_lecture_visibility` is applied.
+8. Proof that English/Kannada switch actual sources.
+9. Test commands and results.
+10. Any genuinely blocked runtime checks.
+11. A statement of whether the implementation is ready for independent Codex verification.
+
+Do not claim it is fully resolved unless the code, tests and runtime evidence support that conclusion.

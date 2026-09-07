@@ -1,0 +1,210 @@
+This is the SimpleLecture mobile app (React Native / Expo). The web app at https://simplelecturelatest.lovable.app/ already has a working V4 video player and free preview system. The mobile app must match the web app's behavior exactly.
+
+I have completed a full technical audit of both codebases. Below are the exact bugs found and the exact fixes required. Do NOT guess or improvise — follow these instructions precisely. Do NOT touch backend/Supabase. Do NOT delete V3 player files yet — just stop routing learner flows to them.
+
+---
+
+## BUG 1: Wrong proxy URL in v4PlayerService.ts
+
+### File: mobile/src/services/v4PlayerService.ts, line 6
+
+Current (WRONG):
+```typescript
+const PROXY_BASE = `${SUPABASE_URL}/functions/v1/v3-player-proxy`;
+```
+
+Fix (CORRECT):
+```typescript
+const PROXY_BASE = `${SUPABASE_URL}/functions/v1/v4-player-proxy`;
+```
+
+This is the #1 reason V4 does not render. The mobile app is hitting the V3 edge function for V4 presentation data.
+
+---
+
+## BUG 2: V4 player is gated to D.Pharmacy course only
+
+### File: mobile/src/lib/playerSelection.ts
+
+The function `shouldUseV4Player()` restricts V4 to a single D.Pharmacy course ID. In the Lovable web app, this function exists but is DEAD CODE — it is defined but never called. Every course uses V4.
+
+Fix: Make `shouldUseV4Player()` always return true:
+
+```typescript
+export function shouldUseV4Player(courseId?: string | null): boolean {
+  return true; // V4 is now enabled for all courses
+}
+```
+
+Keep the DPHARMACY_COURSE_ID export unchanged so nothing breaks if it's referenced elsewhere.
+
+### File: mobile/src/screens/TopicDetailsScreen.tsx
+
+Find the block around line 3077 that checks `shouldUseV4Player(languageCourseId)`. After the fix above, this condition will always be true, so all AI lectures with an extractedJobId will route to V4Player. The else branch (lines ~3104-3113) that falls back to the legacy video_url path will no longer execute for lectures that have an external_job_id. This is correct behavior.
+
+No other changes needed in TopicDetailsScreen.tsx — the existing routing logic is fine once the gate is removed.
+
+---
+
+## BUG 3: CoursePreviewScreen missing free-preview and visibility logic
+
+### File: mobile/src/screens/CoursePreviewScreen.tsx
+
+The current preview screen fetches video_generation_jobs directly but does NOT:
+1. Check `course_free_access_chapters` to know which chapters are actually free
+2. Check `topic_lecture_visibility` to filter marketing vs non-marketing lectures
+
+### Fix Part A: Add free chapter verification
+
+Add a function that queries free preview chapters. Use the existing Supabase constants from `mobile/src/services/supabase.ts` (SUPABASE_URL and SUPABASE_ANON_KEY are already exported there).
+
+```typescript
+async function getFreePreviewChapterIds(courseId: string): Promise<string[]> {
+  const url = `${SUPABASE_URL}/rest/v1/course_free_access_chapters?select=chapter_id&course_id=eq.${courseId}`;
+  const resp = await fetch(url, {
+    headers: {
+      'Accept': 'application/json',
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+    },
+  });
+  if (!resp.ok) return [];
+  const data = await resp.json();
+  return data.map((row: { chapter_id: string }) => row.chapter_id);
+}
+```
+
+Use this to verify that a chapter is actually in the free preview list before allowing playback. Only chapters whose IDs appear in this result should be shown as free/playable. Do not hardcode "first 3 chapters" or any fixed number.
+
+### Fix Part B: Add topic lecture visibility filtering
+
+Add a function to get the visibility mode:
+
+```typescript
+async function getLectureVisibilityMode(topicId: string): Promise<string> {
+  const url = `${SUPABASE_URL}/rest/v1/topic_lecture_visibility?select=mode&topic_id=eq.${topicId}`;
+  const resp = await fetch(url, {
+    headers: {
+      'Accept': 'application/json',
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+    },
+  });
+  if (!resp.ok) return 'both';
+  const data = await resp.json();
+  return data?.[0]?.mode || 'both';
+}
+```
+
+Apply filtering to the AI lectures fetched for a topic:
+
+```typescript
+function filterLecturesByVisibility(lectures: AiLecturePreviewItem[], mode: string): AiLecturePreviewItem[] {
+  if (mode === 'hide_marketing') return lectures.filter(l => !l.is_marketing);
+  if (mode === 'hide_lecture') return lectures.filter(l => l.is_marketing);
+  return lectures; // mode === 'both' or default
+}
+```
+
+IMPORTANT: The `video_generation_jobs` query in CoursePreviewScreen (around line 105) currently does NOT select `is_marketing`. Add `is_marketing` to the select clause:
+
+Change:
+select=id,document_name,external_job_id,video_url,created_at,ai_assistant_documents!inner(topic_id,chapter_id)
+
+To:
+select=id,document_name,external_job_id,video_url,created_at,is_marketing,ai_assistant_documents!inner(topic_id,chapter_id)
+
+Also update the `AiLecturePreviewItem` interface (around line 52) to include `is_marketing`:
+```typescript
+interface AiLecturePreviewItem {
+  id: string;
+  document_name: string | null;
+  external_job_id: string | null;
+  video_url: string | null;
+  is_marketing?: boolean;
+}
+```
+
+Then in the function that handles AI lecture selection for a topic, call `getLectureVisibilityMode(topicId)` and `filterLecturesByVisibility()` before choosing which lecture to play.
+
+### Fix Part C: Route preview lectures through V4Player
+
+When the user taps a lecture in CoursePreviewScreen, the `handleWatchAILecture` function (around line 127-155) currently tries to construct a presentation URL from `video_url`. Instead, when `external_job_id` exists, it should navigate to the V4Player screen:
+
+```typescript
+if (lec.external_job_id) {
+  navigation.navigate('V4Player', {
+    jobId: lec.external_job_id,
+    title: lec.document_name || topicTitle || 'AI Lecture',
+  });
+  return;
+}
+```
+
+This ensures preview lectures use the same V4 player as all other lectures.
+
+---
+
+## BUG 4: Language switching for V4 full lectures
+
+### File: mobile/src/screens/AILecturePlayerScreen.tsx (around line 681)
+
+This screen fetches presentation.json and plays sections. However, for the FULL LECTURE playback (the top-level merged video, not per-section), it needs to support English/Kannada switching using the presentation's top-level fields:
+
+- English: `presentation.vimeo_mp4_url`  
+- Kannada: `presentation.kannada_vimeo_mp4_url`
+
+The Lovable web app's resolver function works like this:
+
+```typescript
+function resolvePlaybackUrl(presentation: any, language: string): { url: string; path: string } {
+  const lang = (language || 'english').toLowerCase();
+  const url = lang === 'english' 
+    ? presentation.vimeo_mp4_url || '' 
+    : presentation[`${lang}_vimeo_mp4_url`] || '';
+  const path = lang === 'english'
+    ? presentation.final_video_path || ''
+    : presentation[`${lang}_final_video`] || '';
+  return { url, path };
+}
+```
+
+If a language-switching dropdown or toggle does not already exist in the V4PlayerScreen or AILecturePlayerScreen for the full-lecture merged video, add one. When both `vimeo_mp4_url` and `kannada_vimeo_mp4_url` exist in the presentation response, show a language selector (dropdown with "English" and "Kannada"). When the user switches:
+1. Pause the current video
+2. Replace the video source with the new language's MP4 URL
+3. Resume playback
+4. Do NOT create a second player instance
+
+If only one language URL exists, do not show the language selector.
+
+---
+
+## DO NOT
+
+- Do NOT delete V3PlayerScreen.tsx, V3Avatar.tsx, or any V3 component files. They may be needed for other flows. Just ensure no learner course preview or AI lecture flow routes to them.
+- Do NOT use `video_url` (the `player_v2/?job=...` URL) for V4 playback. Always use `external_job_id` → `presentation.json` → language-specific Vimeo MP4.
+- Do NOT embed `player.vimeo.com/video/{id}` in a WebView for the V4 flow. Use the direct progressive MP4 URL in a native video player.
+- Do NOT hardcode any Vimeo video IDs or MP4 URLs.
+- Do NOT change anything in the Supabase backend or admin panel.
+
+---
+
+## Verification Test After Changes
+
+Test with this exact data:
+- Course: Class-10 (slug: Class-10, ID: 4c10bc8e-acbc-4b76-b7f5-54376c030cb0)
+- Free chapter: Chemical Reactions and Equations (ID: fb445fdf-67d3-470d-8911-09d1c810fab0)
+- Topic: Chemical Equations (ID: dde10568-3c23-46ae-b96d-3dfc5c33d4df)
+- Expected V4 job: Science_20260702135100912_UXPI4A_52b6ecc7
+- Expected visibility mode: hide_lecture (keeps only marketing lecture)
+- Must play in V4 player with English AND Kannada available
+- V3 must never appear for this flow
+
+After making changes, confirm:
+1. The V4 presentation.json loads successfully (check console for "[V4Source]" logs)
+2. English video plays from vimeo_mp4_url
+3. Kannada video plays from kannada_vimeo_mp4_url  
+4. Language switch changes actual video source
+5. No V3 player appears anywhere in this flow
+6. Free preview chapters come from course_free_access_chapters table
+7. Lecture visibility filtering is applied before showing lectures

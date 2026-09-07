@@ -1,0 +1,139 @@
+# Language Switching Flow in Educational Player (Kannada Example)
+
+This is a documentation-only plan. No code changes. It explains **exactly** what happens in `EducationalVideoPlayer.tsx` when:
+
+1. The user clicks the **Kannada** button on a lecture card (fresh launch in Kannada).
+2. A lecture is already playing in **English** and the user clicks **Kannada** mid-playback.
+
+---
+
+## 1. The building blocks involved
+
+| Piece | File | Role |
+|---|---|---|
+| Lecture card | `src/components/learning/RecordedVideos.tsx` | Renders per-language buttons (English / Kannada / …). On click it opens the player with `initialLanguage` set. |
+| Player dialog | `EducationalVideoPlayerDialog.tsx` | Forwards `initialLanguage` into the player. |
+| Player | `player/EducationalVideoPlayer.tsx` | Owns the state `selectedLanguage`, resolves the correct avatar URL, drives preload/boot, plays the video. |
+| Language picker (inside player) | `player/LanguagePicker.tsx` | Dropdown at line 2933; `onLanguageChange` = `setSelectedLanguage`. |
+| Available languages | `hooks/useAvailableLanguages.ts` | Returns `languages[]` + `avatarMap` (from `language_avatar_jobs`). Used to filter what's shown and as a fallback source. |
+| Section data | `presentation.json` on each section: `avatar_languages[]` (per-language `status`, `video_path`, `video_url`, `b2_url`, `vimeo_url`, `vimeo_mp4_url`). |
+| URL resolver | `player/utils/mediaResolver.ts` (`getCdnMediaUrl`, `getAdminMediaUrl`, `getVimeoProxyUrl`, `getAvatarVideoPath`, `isVimeoSignedUrlLive`). |
+| Blob cache | `preloadedBlobUrlsRef` + `cacheIdentityRef` inside the player. |
+
+---
+
+## 2. Scenario A — User clicks the Kannada button on the lecture card
+
+### Step 1 — Card click sets `initialLanguage`
+`RecordedVideos.tsx` opens `EducationalVideoPlayerDialog` with
+`initialLanguage = "kannada"` (see lines 691 / 722 / 1110 / 1124 where
+`selectedAILanguage ?? restrictToLanguage ?? null` is forwarded).
+
+### Step 2 — Player initial state
+Line 148:
+```
+const [selectedLanguage, setSelectedLanguage] = useState<string | null>(initialLanguage);
+```
+So `selectedLanguage === "kannada"` from the very first render — no English blob is ever preloaded for this session.
+
+### Step 3 — Language validation against purchased/available list
+`useAvailableLanguages(jobId)` returns the languages that actually have completed avatars. The effect at lines 290–299 checks:
+
+- If `selectedLanguage` is not in `availableLanguages`, it warns and resets to English (`setSelectedLanguage(null)`).
+- If Kannada **is** available, it stays.
+
+### Step 4 — Cache identity bakes the language in
+Phase-1 boot builds a cache identity string (lines 784–793) that includes
+`selectedLanguage || 'english'`. Because that key is `"…|kannada|…"`, any
+previously cached English blobs are invalidated (`clearAllBlobCaches`
+at line 807), preventing English audio from bleeding through.
+
+### Step 5 — Avatar URL resolution (Kannada priority chain)
+Two code paths — one for preload (`getAvatarSrcForSection`, lines 363–442) and one for live playback (`avatarUrl` memo, lines 1157–1310). Both use the **same** non-English priority order:
+
+1. `avatar_languages[].video_path` for `lang==="kannada"` and `status ∈ {completed, ready, success}` → wrapped via `getCdnMediaUrl(jobId, path, cdnBaseUrl)` (durable CDN, never expires).
+2. `video_url` / `b2_url` on that language entry (durable direct URL).
+3. `vimeo_url` → wrapped by `getVimeoProxyUrl` (server renegotiates a fresh signed MP4, CORS-safe).
+4. `vimeo_mp4_url` — pre-signed, only if `isVimeoSignedUrlLive(...)` is still true.
+5. Fallback: `languageAvatarMap["kannada"][sectionId]` from the `language_avatar_jobs` table.
+6. Last resort: conventional CDN path `getAvatarVideoPath(sectionId, "kannada")`.
+
+The final `source` tag returned is `'language'`, and the blob (if any) is stored under the Kannada cache identity.
+
+### Step 6 — Boot + playback
+Phase-1 preload downloads the first 2 Kannada section avatars into blob URLs, sets `allAvatarsReady = true`, and playback starts. Kannada audio + Kannada avatar video are played from the very first frame.
+
+---
+
+## 3. Scenario B — Lecture is running in English, user switches to Kannada mid-playback
+
+### Step 1 — User picks Kannada in the in-player `LanguagePicker`
+Line 2936: `onLanguageChange={setSelectedLanguage}` → state flips from `null`/`"english"` to `"kannada"`.
+
+### Step 2 — Failed-source cache is wiped
+Effect at lines 334–338 fires on every `selectedLanguage` change:
+```
+setFailedSources(new Set());
+```
+So any previous "vimeo failed / local failed" flags for English don't poison the new Kannada attempts.
+
+### Step 3 — Cache identity changes → English blobs are dropped
+The `cacheIdentity` string (lines 784–793) now ends with `|kannada|…`.
+The mismatch handler at lines 794–808 runs:
+
+- Logs `[BOOT][PHASE1][IDENTITY-CHANGE]`.
+- Sets `allAvatarsReady = false`.
+- `hasAutoPlayedRef = false`, `pendingAutoPlayRef = false`.
+- Calls `clearAllBlobCaches("new boot identity …")` — every preloaded English blob URL is revoked.
+
+### Step 4 — English blob is refused even if still present
+The live `avatarUrl` memo (line 1160) computes:
+```
+cacheMatchesLanguage = cacheIdentityRef.current?.includes(`|${activeCacheLanguage}|`)
+```
+For Kannada, `activeCacheLanguage = "kannada"`. If a stale English blob is still in `preloadedBlobUrlsRef`, `cacheMatchesLanguage` is false, so the blob branch (line 1163) is skipped. The **LANGUAGE OVERRIDE** block (lines 1238–1310) takes over and streams Kannada from CDN/Vimeo — this is the guard the code comment calls out explicitly:
+> "ALWAYS stream that language's avatar from CDN/Vimeo — never fall back to the preloaded English blob (which would play English audio)."
+
+### Step 5 — Section state reset
+The `[currentSection, currentSectionIndex]` effect at lines 340–360 also runs (because the section object is stable but its resolved URL changes). It:
+- Clears `contentVideoSrc` and `failedSources`.
+- Resets `avatarLoading = true`, `avatarBuffering = false`.
+- Resets beat-sync refs so the new Kannada video restarts sync from segment 0.
+
+### Step 6 — Kannada avatar loads for the current section
+`avatarUrl` returns `{ url: <cdn/vimeo Kannada url>, source: 'language' }`. The player's `<video>` gets that `src`, buffering indicator shows briefly, then Kannada audio + video play. Meanwhile Phase-1 re-preloads the first 2 Kannada blobs in the background under the new cache identity.
+
+### Step 7 — Playback position on switch
+There is currently no explicit "resume from same timestamp" — after a language switch the section restarts from the beginning of the newly loaded Kannada video (the segment/beat refs are reset in Step 5). If the user wants mid-section resume, that is a separate feature.
+
+---
+
+## 4. Fallback order summary (both scenarios)
+
+For non-English (Kannada) — highest to lowest:
+
+```text
+1. CDN durable path         (avatar_languages[].video_path via cdnBaseUrl)
+2. Durable direct URL       (video_url / b2_url)
+3. Vimeo proxy              (getVimeoProxyUrl of vimeo_url)
+4. Live signed Vimeo MP4    (vimeo_mp4_url, only if not expired)
+5. language_avatar_jobs map (languageAvatarMap[lang][sectionId])
+6. Conventional CDN path    (getAvatarVideoPath(sectionId, "kannada"))
+```
+
+If every step fails, `avatarLoadFailed` flips true and the "presentation-only" mode banner shows (no avatar, narration text still visible).
+
+---
+
+## 5. What guarantees Kannada audio never plays as English
+
+- `initialLanguage` is threaded from the card into `useState` on line 148 — no English is ever fetched when Kannada is preselected.
+- Cache identity includes the language, so blob caches from a different language are invalidated on switch (lines 794–808).
+- The `cacheMatchesLanguage` check (line 1160) refuses to reuse a mismatched blob even if the ref still holds it.
+- The **LANGUAGE OVERRIDE** branch (lines 1238–1310) short-circuits the entire English fallback chain when `selectedLanguage` is non-English.
+
+---
+
+## 6. Deliverable
+
+This plan is documentation only. No files will be modified. If you approve, I will not run any implementation — the plan itself is the answer to your question.
