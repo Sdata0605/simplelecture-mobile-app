@@ -257,8 +257,26 @@ export function AskAIAssistant({
     return () => timers.forEach((t) => clearTimeout(t));
   }, [stage, say]);
 
-  // Closing mid-answer must stop the /ask stream and the video polling.
-  useEffect(() => () => reset(), [reset]);
+  // Closing mid-answer must stop the /ask stream and the video polling — but
+  // an unmount that happens *while a question is in flight* is a bug, not a
+  // close: it throws the question away and the student just sees the orb go
+  // quiet. That used to be silent (V5's render gate re-read an async query and
+  // unmounted this component ~1s after submit); it is now loud, so any other
+  // remount vector shows up in the log immediately.
+  const stageForUnmountRef = useRef(stage);
+  stageForUnmountRef.current = stage;
+  useEffect(() => {
+    askLog('mount', 'assistant mounted');
+    return () => {
+      const at = stageForUnmountRef.current;
+      if (at === 'processing' || at === 'answer') {
+        askWarn('unmount', `UNMOUNTED during "${at}" — discarding the in-flight question (this is a bug)`);
+      } else {
+        askLog('unmount', `assistant unmounted (stage=${at})`);
+      }
+      reset();
+    };
+  }, [reset]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';

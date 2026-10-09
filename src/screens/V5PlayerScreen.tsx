@@ -21,7 +21,7 @@ import KeepScreenAwake from '../components/KeepScreenAwake';
 import V5KeyPointsOverlay from '../components/v5/V5KeyPointsOverlay';
 import V5SectionProgress from '../components/v5/V5SectionProgress';
 import { AskAIAssistant } from '../components/askAssistant/AskAIAssistant';
-import { useAthenaLink } from '../hooks/useAthenaLink';
+import { useAthenaLink, type AthenaLink } from '../hooks/useAthenaLink';
 import { seekMillisFromPress } from '../utils/marketingVideoControls';
 import {
   fetchV5Presentation,
@@ -87,6 +87,13 @@ export default function V5PlayerScreen() {
   // button, which is gated the same way).
   const { data: athenaLink } = useAthenaLink(subjectId, topicId);
   const [askAIOpen, setAskAIOpen] = useState(false);
+  // The Athena link the assistant was opened with, snapshotted on open.
+  // getAthenaLink resolves with athenaSubjectId: null (rather than throwing)
+  // whenever the access token is momentarily unavailable, so re-reading the
+  // live query in the render gate below would unmount an open assistant on a
+  // token hiccup — and its unmount closes the in-flight /ask stream, silently
+  // throwing away the student's question.
+  const [askAILink, setAskAILink] = useState<AthenaLink | null>(null);
   const resumeAfterAskRef = useRef(false);
 
   const videoRef = useRef<Video>(null);
@@ -326,15 +333,18 @@ export default function V5PlayerScreen() {
   // close only if it was actually playing before (never auto-resume a video
   // the student had already paused themselves).
   const handleAskAI = useCallback(() => {
+    if (!athenaLink?.athenaSubjectId) return;
     resumeAfterAskRef.current = isPlaying;
     videoRef.current?.pauseAsync().catch(() => {});
     setIsPlaying(false);
+    setAskAILink(athenaLink);
     setAskAIOpen(true);
     showControls();
-  }, [isPlaying, showControls]);
+  }, [athenaLink, isPlaying, showControls]);
 
   const handleCloseAskAI = useCallback(() => {
     setAskAIOpen(false);
+    setAskAILink(null);
     if (resumeAfterAskRef.current) {
       resumeAfterAskRef.current = false;
       videoRef.current?.playAsync().catch(() => {});
@@ -771,13 +781,13 @@ export default function V5PlayerScreen() {
         }}
       />
 
-      {askAIOpen && !!athenaLink?.athenaSubjectId && (
+      {askAIOpen && !!askAILink?.athenaSubjectId && (
         <AskAIAssistant
           trigger="mid"
           onClose={handleCloseAskAI}
-          subjectName={athenaLink.subjectName ?? undefined}
-          athenaSubjectId={athenaLink.athenaSubjectId}
-          athenaTopicId={athenaLink.athenaTopicId ?? undefined}
+          subjectName={askAILink.subjectName ?? undefined}
+          athenaSubjectId={askAILink.athenaSubjectId}
+          athenaTopicId={askAILink.athenaTopicId ?? undefined}
         />
       )}
     </View>
