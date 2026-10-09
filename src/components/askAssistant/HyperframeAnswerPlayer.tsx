@@ -94,6 +94,7 @@ const FRAME_BOOTSTRAP = `<script>
   var post = function (msg) {
     try { window.ReactNativeWebView.postMessage(String(msg).slice(0, 300)); } catch (e) {}
   };
+  window.__post = post;
   window.onerror = function (message, source, line) {
     post('error: ' + message + ' @ ' + (source || '?') + ':' + (line || '?'));
   };
@@ -136,14 +137,37 @@ const FRAME_BOOTSTRAP = `<script>
   window.addEventListener('resize', applyFit);
   document.addEventListener('DOMContentLoaded', applyFit);
 
+  // The timelines are built paused, and gsap.from() has already pinned every
+  // target at opacity 0 — so a timeline that is never played is not a static
+  // slide, it is a black rectangle. The web player starts it synchronously
+  // (iframe.contentWindow.__timelines.main.play(0)); here the host has to
+  // injectJavaScript, which is asynchronous and fire-and-forget. If that never
+  // lands the student stares at nothing, so the page starts itself.
+  var autostart = function () {
+    var tl = window.__timelines && window.__timelines.main;
+    if (!tl) return;
+    if (window.__rnDrove) return; // host already took control
+    post('autostarting timeline — host never drove this beat');
+    tl.play(0);
+  };
+
   var report = function () {
     applyFit();
     post('layout innerWidth=' + window.innerWidth + ' scale=' + scaled.toFixed(3) +
          ' dpr=' + window.devicePixelRatio + ' gsap=' + (typeof window.gsap) +
          ' timelines=' + (window.__timelines ? Object.keys(window.__timelines).join(',') : 'NONE'));
   };
-  if (document.readyState === 'complete') setTimeout(function () { report(); reveal(); }, 400);
-  else window.addEventListener('load', function () { setTimeout(function () { report(); reveal(); }, 400); });
+  var onReady = function () {
+    setTimeout(function () { report(); reveal(); autostart(); }, 400);
+    // Confirm the animation is actually advancing; a timeline that is playing
+    // but stuck at 0 means the WebView is not running requestAnimationFrame.
+    setTimeout(function () {
+      var tl = window.__timelines && window.__timelines.main;
+      if (tl) post('timeline progress=' + tl.progress().toFixed(2) + ' paused=' + tl.paused());
+    }, 2000);
+  };
+  if (document.readyState === 'complete') onReady();
+  else window.addEventListener('load', onReady);
 })();
 </script>`;
 
@@ -167,33 +191,40 @@ function prepareBeatHtml(html: string): string {
 const GSAP_PLAY = `
 try {
   var w = window;
+  w.__rnDrove = true;
   var timelines = w.__timelines;
   var tl = timelines && (timelines.main || Object.values(timelines)[0]);
   if (tl) tl.play(0);
+  w.__post && w.__post('host play -> ' + (tl ? 'ok' : 'NO TIMELINE'));
 } catch (e) {}
 true;
 `;
 const GSAP_PAUSE = `
 try {
   var w = window;
+  w.__rnDrove = true;
   var timelines = w.__timelines;
   var tl = timelines && (timelines.main || Object.values(timelines)[0]);
   if (tl) tl.pause();
+  w.__post && w.__post('host pause -> ' + (tl ? 'ok' : 'NO TIMELINE'));
 } catch (e) {}
 true;
 `;
 const GSAP_RESUME = `
 try {
   var w = window;
+  w.__rnDrove = true;
   var timelines = w.__timelines;
   var tl = timelines && (timelines.main || Object.values(timelines)[0]);
   if (tl) tl.play();
+  w.__post && w.__post('host resume -> ' + (tl ? 'ok' : 'NO TIMELINE'));
 } catch (e) {}
 true;
 `;
 const GSAP_STOP = `
 try {
   var w = window;
+  w.__rnDrove = true;
   var timelines = w.__timelines;
   var tl = timelines && (timelines.main || Object.values(timelines)[0]);
   if (tl) { tl.pause(); tl.progress(0); }
