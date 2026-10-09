@@ -32,6 +32,7 @@ import {
   type ExpoSpeechRecognitionResultEvent,
   type ExpoSpeechRecognitionErrorEvent,
 } from 'expo-speech-recognition';
+import { askLog, askWarn, preview } from './askLog';
 import { voiceLock } from '../voiceLock';
 import {
   createRestartThrottle,
@@ -171,6 +172,7 @@ function createEngine(d: EngineDeps) {
   };
 
   const fail = (code: string) => {
+    askWarn('mic', `fatal: ${code} — mic released, student must tap or type`);
     teardown();
     d.setError(code);
     setStatus('error');
@@ -197,14 +199,17 @@ function createEngine(d: EngineDeps) {
     const dec = detector.push({ type: 'tick', at: t });
     if (dec.kind === 'finalize') {
       const text = dec.text;
+      askLog('mic', `utterance finalized -> submitting: ${preview(text)}`);
       finish(() => d.getOpts().onUtterance(text));
       return;
     }
     if (dec.kind === 'unclear') {
+      askWarn('mic', 'utterance unclear — asking the student to repeat');
       finish(() => d.getOpts().onUnclear?.());
       return;
     }
     if (!heard && !detector.inUtterance && t - startedAt >= noSpeechTimeoutMs) {
+      askWarn('mic', `no speech heard in ${noSpeechTimeoutMs}ms`);
       finish(() => d.getOpts().onNoSpeechTimeout?.());
       return;
     }
@@ -221,6 +226,7 @@ function createEngine(d: EngineDeps) {
   };
 
   const handleError = (code: string) => {
+    askWarn('mic', `recognition error: ${code}`);
     switch (code) {
       case 'no-speech':
       case 'speech-timeout':
@@ -251,6 +257,7 @@ function createEngine(d: EngineDeps) {
     sessionInterim = '';
 
     const onStart = () => {
+      askLog('mic', `session ${id} started (lang=${lang})`);
       if (live() && status === 'starting') setStatus('listening');
     };
     const onSpeechStart = () => {
@@ -273,6 +280,7 @@ function createEngine(d: EngineDeps) {
       networkErrors = 0;
       foreignAborts = 0;
       const transcript = ev.results?.[0]?.transcript ?? '';
+      askLog('mic', `${ev.isFinal ? 'final' : 'interim'}: ${preview(transcript, 60)}`);
       if (ev.isFinal) {
         if (transcript) finalSegments.push(transcript);
         sessionInterim = '';
@@ -294,6 +302,7 @@ function createEngine(d: EngineDeps) {
       handleError(ev?.error ?? 'unknown');
     };
     const onEnd = () => {
+      askLog('mic', `session ${id} ended`);
       if (id !== sessionId) return;
       if (ownAbort) {
         ownAbort = false;

@@ -31,6 +31,7 @@ import { VoiceOrb, type VoiceOrbMode } from './VoiceOrb';
 import { useHandsFreeSpeech } from '../../services/askAssistant/useHandsFreeSpeechNative';
 import { useAssistantVoice } from '../../services/askAssistant/useAssistantVoice';
 import { cuesForAnswerProgress, type AnswerProgress } from '../../services/askAssistant/statusCues';
+import { askLog, askWarn, preview } from '../../services/askAssistant/askLog';
 import type { AssistantClipCategory } from '../../services/askAssistant/assistantAudioTypes';
 
 type Stage =
@@ -94,6 +95,7 @@ export function AskAIAssistant({
   const composerFocusedRef = useRef(false);
 
   const goTo = useCallback((next: Stage) => {
+    if (stageRef.current !== next) askLog('stage', `${stageRef.current} -> ${next}`);
     stageRef.current = next;
     setStage(next);
   }, []);
@@ -130,14 +132,17 @@ export function AskAIAssistant({
     // Never open the mic under a student who's mid-typing — a spoken word
     // would submit and wipe their draft.
     if (composerFocusedRef.current) {
+      askLog('mic', 'not opening — the composer has focus');
       goTo('paused');
       return;
     }
     if (!speech.supported) {
+      askWarn('mic', 'speech recognition unsupported on this device');
       setMicProblem('unsupported');
       goTo('paused');
       return;
     }
+    askLog('mic', 'opening');
     setMicProblem(null);
     goTo('listening');
     void speech.start();
@@ -145,7 +150,11 @@ export function AskAIAssistant({
 
   actions.current.submit = (raw: string) => {
     const text = raw.trim();
-    if (!text) return;
+    if (!text) {
+      askWarn('submit', 'ignored an empty question');
+      return;
+    }
+    askLog('submit', preview(text));
     speech.stop();
     interrupt();
     silenceStrikesRef.current = 0;
@@ -190,6 +199,7 @@ export function AskAIAssistant({
   const prevSpeechStatusRef = useRef(speech.status);
   useEffect(() => {
     const prev = prevSpeechStatusRef.current;
+    if (prev !== speech.status) askLog('mic', `status ${prev} -> ${speech.status}`);
     prevSpeechStatusRef.current = speech.status;
     if (stageRef.current !== 'listening') return;
     if (speech.status === 'error') {

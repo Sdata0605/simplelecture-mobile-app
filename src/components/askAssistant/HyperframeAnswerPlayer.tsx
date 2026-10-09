@@ -31,6 +31,7 @@ import {
   type HyperframeVideoStatus,
 } from '../../services/askAssistant/athenaAsk';
 import type { PostLectureAnswerPhase } from '../../hooks/usePostLectureAthenaAnswer';
+import { askLog, askWarn } from '../../services/askAssistant/askLog';
 
 interface HyperframeAnswerPlayerProps {
   answerId: string | null;
@@ -190,11 +191,14 @@ export function HyperframeAnswerPlayer({
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const html = await res.text();
           if (!html) throw new Error('empty body');
-          if (!cancelled) setFrameHtml((prev) => ({ ...prev, [i]: html }));
+          if (!cancelled) {
+            askLog('frame', `beat ${i + 1}/${beatCount} html ready (${html.length} bytes)`);
+            setFrameHtml((prev) => ({ ...prev, [i]: html }));
+          }
           return;
         } catch (err) {
           if (attempt === FETCH_ATTEMPTS - 1) {
-            console.warn(`[Hyperframe] beat ${i + 1}/${beatCount} HTML failed:`, String(err));
+            askWarn('frame', `beat ${i + 1}/${beatCount} html FAILED after ${FETCH_ATTEMPTS} tries: ${String(err)}`);
           } else {
             await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS * (attempt + 1)));
           }
@@ -252,6 +256,7 @@ export function HyperframeAnswerPlayer({
             { uri: resolveHyperframeAssetUrl(answerId, path) },
             { shouldPlay: false },
           );
+          askLog('audio', `beat ${idx + 1} ${v} narration loaded`);
           soundRefs.current[key] = sound;
           sound.setOnPlaybackStatusUpdate((status: AVPlaybackStatus) => {
             if (!status.isLoaded) return;
@@ -259,7 +264,7 @@ export function HyperframeAnswerPlayer({
           });
           return sound;
         } catch (err) {
-          console.warn(`[Hyperframe] beat ${idx + 1} ${v} narration failed:`, String(err));
+          askWarn('audio', `beat ${idx + 1} ${v} narration FAILED: ${String(err)}`);
           return null;
         } finally {
           soundLoadsRef.current[key] = null;
@@ -277,6 +282,7 @@ export function HyperframeAnswerPlayer({
   // out. Only the active voice: the other one is loaded on switch.
   useEffect(() => {
     if (!video || !answerId || beatCount === 0) return;
+    askLog('audio', `preloading ${beatCount} ${voice} clip(s)`);
     for (let i = 0; i < beatCount; i += 1) void loadSoundForBeat(i, voice);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video, answerId, voice, beatCount]);
@@ -317,9 +323,11 @@ export function HyperframeAnswerPlayer({
       // Preloaded (the common case): start in this tick, no spinner, no await.
       const ready = soundRefs.current[`${idx}:${voice}`];
       if (ready) {
+        askLog('beat', `${idx + 1}/${beatCount} playing (narration preloaded)`);
         startNarration(ready);
         return;
       }
+      askWarn('beat', `${idx + 1}/${beatCount} waiting on its narration download`);
       setLoadingBeat(true);
       void loadSoundForBeat(idx, voice).then((sound) => {
         setLoadingBeat(false);
@@ -489,13 +497,13 @@ export function HyperframeAnswerPlayer({
                       // invisible from the outside — surface it in the log.
                       injectedJavaScriptBeforeContentLoaded={FRAME_ERROR_BRIDGE}
                       onMessage={(e) => {
-                        console.warn(`[Hyperframe] beat ${i + 1} page error:`, e.nativeEvent.data);
+                        askWarn('frame', `beat ${i + 1} page error: ${e.nativeEvent.data}`);
                       }}
                       onError={({ nativeEvent }) =>
-                        console.warn(`[Hyperframe] beat ${i + 1} load error:`, nativeEvent.description)
+                        askWarn('frame', `beat ${i + 1} load error: ${nativeEvent.description}`)
                       }
                       onHttpError={({ nativeEvent }) =>
-                        console.warn(`[Hyperframe] beat ${i + 1} HTTP ${nativeEvent.statusCode}`)
+                        askWarn('frame', `beat ${i + 1} HTTP ${nativeEvent.statusCode}`)
                       }
                       onLoadEnd={() => {
                         frameReady.current[i] = true;

@@ -17,6 +17,7 @@ import {
   pollHyperframeVideo,
   type AskAthenaHandle,
 } from '../services/askAssistant/athenaAsk';
+import { askLog, askWarn, resetAskClock } from '../services/askAssistant/askLog';
 
 const VIDEO_POLL_MS = 3000;
 const VIDEO_TIMEOUT_MS = 5 * 60 * 1000;
@@ -51,6 +52,13 @@ const INITIAL_STATE: PostLectureAnswerState = {
 
 export function usePostLectureAthenaAnswer() {
   const [state, setState] = useState<PostLectureAnswerState>(INITIAL_STATE);
+  // Phase changes are the backbone of the trace: every stall shows up as a
+  // long gap after one of these lines.
+  const lastPhaseRef = useRef<PostLectureAnswerPhase>('idle');
+  if (lastPhaseRef.current !== state.phase) {
+    askLog('phase', `${lastPhaseRef.current} -> ${state.phase}`);
+    lastPhaseRef.current = state.phase;
+  }
   const handleRef = useRef<AskAthenaHandle | null>(null);
   const abortedRef = useRef(false);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -83,25 +91,31 @@ export function usePostLectureAthenaAnswer() {
 
       const elapsed = () => `${Math.round((Date.now() - askStartedAtRef.current) / 1000)}s`;
 
+      let attempt = 0;
       const tick = async () => {
+        attempt += 1;
         try {
           const video = await pollHyperframeVideo(answerId);
+          askLog(
+            'poll',
+            `#${attempt} ready=${String(video.ready)} beats=${video.html_paths.length} audioF=${video.audio_female.length}`,
+          );
           if (video.ready === true && video.html_paths.length > 0) {
-            console.log(`[Athena] presentation ready after ${elapsed()} — ${video.html_paths.length} beat(s)`);
+            askLog('poll', `presentation READY after ${elapsed()} — ${video.html_paths.length} beat(s)`);
             setState((prev) => ({ ...prev, phase: 'video_ready', video }));
             return;
           }
           if (video.ready === false) {
-            console.log(`[Athena] presentation generation failed after ${elapsed()} — staying on text`);
+            askWarn('poll', `generation FAILED after ${elapsed()} — staying on text`);
             setState((prev) => ({ ...prev, phase: 'text_only' }));
             return;
           }
         } catch (err) {
           // Transient poll failure — keep trying until the timeout.
-          console.warn('[Athena] video poll failed, retrying:', String(err));
+          askWarn('poll', `#${attempt} failed, retrying: ${String(err)}`);
         }
         if (Date.now() >= pollDeadlineRef.current) {
-          console.warn(`[Athena] gave up waiting for the presentation after ${elapsed()}`);
+          askWarn('poll', `gave up after ${elapsed()} (${attempt} attempts)`);
           setState((prev) => (prev.phase === 'video_ready' ? prev : { ...prev, phase: 'text_only' }));
           return;
         }
@@ -119,6 +133,8 @@ export function usePostLectureAthenaAnswer() {
       abortedRef.current = false;
       metaRef.current = null;
       askStartedAtRef.current = Date.now();
+      resetAskClock();
+      askLog('ask', `submitting (${params.question.length} chars)`);
 
       setState({ ...INITIAL_STATE, phase: 'asking' });
 
@@ -145,12 +161,13 @@ export function usePostLectureAthenaAnswer() {
               const hfEnabled = metaRef.current?.hf_enabled ?? false;
               const secs = Math.round((Date.now() - askStartedAtRef.current) / 1000);
               if (hfEnabled && answerId) {
-                console.log(`[Athena] answer streamed in ${secs}s; polling for the presentation (${answerId})`);
+                askLog('ask', `answer streamed in ${secs}s; polling for presentation ${answerId}`);
                 pollVideo(answerId);
                 setState((prev) => ({ ...prev, phase: 'awaiting_video', sources: event.sources }));
               } else {
-                console.log(
-                  `[Athena] text-only answer in ${secs}s (hf_enabled=${hfEnabled}, answer_id=${answerId ?? 'missing'})`,
+                askWarn(
+                  'ask',
+                  `TEXT-ONLY after ${secs}s — no presentation will load (hf_enabled=${hfEnabled}, answer_id=${answerId ?? 'missing'})`,
                 );
                 setState((prev) => ({ ...prev, phase: 'text_only', sources: event.sources }));
               }
