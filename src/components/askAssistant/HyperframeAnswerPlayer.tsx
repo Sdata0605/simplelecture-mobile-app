@@ -84,6 +84,11 @@ const RETRY_BACKOFF_MS = 600;
  * readable. These timelines start with gsap.from() holding the content at
  * opacity 0, so without the reveal below a missing GSAP is a black rectangle —
  * exactly what the student was looking at. */
+/** The canvas every Athena beat page is authored against. Declared before
+ * FRAME_BOOTSTRAP because that template literal interpolates them. */
+const BEAT_WIDTH = 1920;
+const BEAT_HEIGHT = 1080;
+
 const FRAME_BOOTSTRAP = `<script>
 (function () {
   var post = function (msg) {
@@ -109,8 +114,36 @@ const FRAME_BOOTSTRAP = `<script>
     style.textContent = '#composition, #composition * { opacity: 1 !important; visibility: visible !important; transform: none !important; }';
     document.head.appendChild(style);
   };
-  if (document.readyState === 'complete') setTimeout(reveal, 400);
-  else window.addEventListener('load', function () { setTimeout(reveal, 400); });
+  // The page is authored as a fixed 1920x1080 canvas. Web scales its iframe
+  // from the outside; here the page scales itself to the WebView's width, so
+  // the whole slide is visible instead of its empty top-left corner. Doing it
+  // in-page keeps the native view at its normal size — laying a WebView out at
+  // 1920dp would be ~5760 physical px on a 3x screen, past common GPU texture
+  // limits.
+  var fit = function () {
+    var comp = document.getElementById('composition');
+    if (!comp) return 0;
+    var scale = window.innerWidth / ${BEAT_WIDTH};
+    comp.style.transformOrigin = 'top left';
+    comp.style.transform = 'scale(' + scale + ')';
+    document.documentElement.style.cssText += ';width:100%;height:auto;overflow:hidden;';
+    document.body.style.cssText += ';width:100%;height:' + (${BEAT_HEIGHT} * scale) + 'px;overflow:hidden;';
+    return scale;
+  };
+  var scaled = 0;
+  var applyFit = function () { scaled = fit(); };
+  applyFit();
+  window.addEventListener('resize', applyFit);
+  document.addEventListener('DOMContentLoaded', applyFit);
+
+  var report = function () {
+    applyFit();
+    post('layout innerWidth=' + window.innerWidth + ' scale=' + scaled.toFixed(3) +
+         ' dpr=' + window.devicePixelRatio + ' gsap=' + (typeof window.gsap) +
+         ' timelines=' + (window.__timelines ? Object.keys(window.__timelines).join(',') : 'NONE'));
+  };
+  if (document.readyState === 'complete') setTimeout(function () { report(); reveal(); }, 400);
+  else window.addEventListener('load', function () { setTimeout(function () { report(); reveal(); }, 400); });
 })();
 </script>`;
 
@@ -120,7 +153,8 @@ const FRAME_BOOTSTRAP = `<script>
  * empty top-left corner. Declaring the wide viewport makes the WebView scale
  * the whole 1920px canvas to fit — the slide is 16:9 like its container, so
  * fitting the width fits the height too. */
-const BEAT_VIEWPORT = '<meta name="viewport" content="width=1920, user-scalable=no">';
+const BEAT_VIEWPORT =
+  '<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">';
 
 function prepareBeatHtml(html: string): string {
   const head = html.match(/<head[^>]*>/i);
