@@ -68,26 +68,67 @@ function stripHtml(html: string | undefined | null): string {
 const FETCH_ATTEMPTS = 3;
 const RETRY_BACKOFF_MS = 600;
 
-/** Reports a beat page's own script failures back to RN. These pages are
- * GSAP-driven and usually start with everything at opacity 0, so a failed
- * script reads as "the presentation never came" rather than as an error. */
-const FRAME_ERROR_BRIDGE = `
+/** Injected as the first thing in <head>, ahead of the page's GSAP tag, so it
+ * is guaranteed to run before the page's own scripts (Android's
+ * injectedJavaScriptBeforeContentLoaded is not reliably that early — which is
+ * why a failing CDN script went unreported).
+ *
+ * Served normally these pages are healthy: GSAP and KaTeX load and
+ * `window.__timelines.main` is registered. Inside the WebView every beat
+ * instead reported a bare "Script error." — the sanitized form an error takes
+ * when it comes from a cross-origin script, so the detail is hidden. The most
+ * likely culprit is the page's CDN <script> tags not loading, which leaves
+ * `gsap` undefined and the inline timeline script throwing on its first line.
+ *
+ * Two jobs, then: name the failing resource, and make sure a failure is still
+ * readable. These timelines start with gsap.from() holding the content at
+ * opacity 0, so without the reveal below a missing GSAP is a black rectangle —
+ * exactly what the student was looking at. */
+const FRAME_BOOTSTRAP = `<script>
 (function () {
   var post = function (msg) {
     try { window.ReactNativeWebView.postMessage(String(msg).slice(0, 300)); } catch (e) {}
   };
   window.onerror = function (message, source, line) {
-    post(message + ' @ ' + (source || '?') + ':' + (line || '?'));
+    post('error: ' + message + ' @ ' + (source || '?') + ':' + (line || '?'));
   };
   window.addEventListener('unhandledrejection', function (e) {
     post('unhandled rejection: ' + (e && e.reason));
   });
   window.addEventListener('error', function (e) {
-    if (e && e.target && e.target.src) post('failed to load ' + e.target.src);
+    var el = e && e.target;
+    if (el && (el.src || el.href)) post('FAILED TO LOAD ' + (el.src || el.href));
   }, true);
+
+  // Last line of defence: if the timeline never registered, nothing will ever
+  // play, so drop the animation's initial hidden state and show the slide.
+  var reveal = function () {
+    if (window.__timelines && window.__timelines.main) return;
+    post('no timeline registered (gsap=' + (typeof window.gsap) + ') — showing the slide unanimated');
+    var style = document.createElement('style');
+    style.textContent = '#composition, #composition * { opacity: 1 !important; visibility: visible !important; transform: none !important; }';
+    document.head.appendChild(style);
+  };
+  if (document.readyState === 'complete') setTimeout(reveal, 400);
+  else window.addEventListener('load', function () { setTimeout(reveal, 400); });
 })();
-true;
-`;
+</script>`;
+
+/** The pages are a fixed 1920x1080 canvas with no viewport meta. Web scales
+ * the iframe down itself (`--hf-scale`, min(w/1920, h/1080)); nothing did that
+ * here, so the WebView laid the slide out at full size and showed only its
+ * empty top-left corner. Declaring the wide viewport makes the WebView scale
+ * the whole 1920px canvas to fit — the slide is 16:9 like its container, so
+ * fitting the width fits the height too. */
+const BEAT_VIEWPORT = '<meta name="viewport" content="width=1920, user-scalable=no">';
+
+function prepareBeatHtml(html: string): string {
+  const head = html.match(/<head[^>]*>/i);
+  if (!head) return `${BEAT_VIEWPORT}${FRAME_BOOTSTRAP}${html}`;
+  const needsViewport = !/<meta[^>]+name=["']viewport["']/i.test(html);
+  const inject = `${needsViewport ? BEAT_VIEWPORT : ''}${FRAME_BOOTSTRAP}`;
+  return html.replace(head[0], `${head[0]}${inject}`);
+}
 
 const GSAP_PLAY = `
 try {
@@ -197,7 +238,7 @@ export function HyperframeAnswerPlayer({
           if (!html) throw new Error('empty body');
           if (!cancelled) {
             askLog('frame', `beat ${i + 1}/${beatCount} html ready (${html.length} bytes)`);
-            setFrameHtml((prev) => ({ ...prev, [i]: html }));
+            setFrameHtml((prev) => ({ ...prev, [i]: prepareBeatHtml(html) }));
           }
           return;
         } catch (err) {
@@ -502,10 +543,8 @@ export function HyperframeAnswerPlayer({
                         request.url.startsWith('data:') ||
                         request.url.startsWith(HYPERFRAME_BASE_URL)
                       }
-                      // A beat that renders but stays blank (a script the page
-                      // needs failing to load, a GSAP error) is otherwise
-                      // invisible from the outside — surface it in the log.
-                      injectedJavaScriptBeforeContentLoaded={FRAME_ERROR_BRIDGE}
+                      // Scale the fixed 1920x1080 canvas down to the box.
+                      scalesPageToFit
                       onMessage={(e) => {
                         askWarn('frame', `beat ${i + 1} page error: ${e.nativeEvent.data}`);
                       }}
