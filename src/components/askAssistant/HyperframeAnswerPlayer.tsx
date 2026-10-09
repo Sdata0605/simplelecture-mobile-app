@@ -26,6 +26,8 @@ import { WebView } from 'react-native-webview';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  athenaProxyFetch,
+  HYPERFRAME_BASE_URL,
   resolveHyperframeAssetUrl,
   type AthenaSegment,
   type HyperframeVideoStatus,
@@ -187,7 +189,9 @@ export function HyperframeAnswerPlayer({
     const loadBeat = async (path: string, i: number) => {
       for (let attempt = 0; attempt < FETCH_ATTEMPTS && !cancelled; attempt += 1) {
         try {
-          const res = await fetch(resolveHyperframeAssetUrl(answerId, path));
+          // expo/fetch, not RN's global fetch: the latter never returns for
+          // this host on the affected build (see athenaProxyFetch).
+          const res = await athenaProxyFetch(resolveHyperframeAssetUrl(answerId, path));
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const html = await res.text();
           if (!html) throw new Error('empty body');
@@ -484,13 +488,19 @@ export function HyperframeAnswerPlayer({
                         webviewRefs.current[i] = el;
                       }}
                       originWhitelist={['*']}
-                      source={{ html: frameHtml[i] }}
+                      source={{ html: frameHtml[i], baseUrl: HYPERFRAME_BASE_URL }}
                       style={styles.webview}
                       scrollEnabled={false}
                       javaScriptEnabled
                       domStorageEnabled
+                      // Allow the injected document itself (now reported under
+                      // HYPERFRAME_BASE_URL) but still refuse to navigate away;
+                      // subresources like the GSAP CDN script are not routed
+                      // through this hook on either platform.
                       onShouldStartLoadWithRequest={(request) =>
-                        request.url === 'about:blank' || request.url.startsWith('data:')
+                        request.url === 'about:blank' ||
+                        request.url.startsWith('data:') ||
+                        request.url.startsWith(HYPERFRAME_BASE_URL)
                       }
                       // A beat that renders but stays blank (a script the page
                       // needs failing to load, a GSAP error) is otherwise

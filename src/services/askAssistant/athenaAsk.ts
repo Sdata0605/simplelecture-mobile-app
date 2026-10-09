@@ -22,6 +22,17 @@ function proxyUrl(path: string, extra?: Record<string, string>) {
   return `${PROXY_URL}?${search.toString()}`;
 }
 
+/** Origin to mount injected beat pages under.
+ *
+ * The pages pull GSAP and KaTeX from cdn.jsdelivr.net and Google Fonts. Web
+ * gets that for free: an iframe's `srcDoc` document inherits the parent's
+ * origin. React Native injects the markup instead, and without a baseUrl
+ * Android loads it with a null/opaque origin, where remote subresources are
+ * unreliable — the page renders but GSAP never arrives, and since these
+ * timelines start with everything at opacity 0 the result is a blank stage
+ * rather than a visible error. Any real https origin fixes it. */
+export const HYPERFRAME_BASE_URL = `${SUPABASE_DIRECT_URL}/`;
+
 /** Full, fetchable URL for a HyperFrame html_paths/audio_* relative path. */
 export function resolveHyperframeAssetUrl(answerId: string, relativePath: string): string {
   const clean = relativePath.replace(/^\/+/, '');
@@ -262,8 +273,27 @@ export interface HyperframeVideoStatus {
   audio_male: string[];
 }
 
+/** Every athena-proxy call goes through expo/fetch with a hard timeout.
+ *
+ * RN's global `fetch` never came back for this host on the affected build —
+ * the video poll awaited it forever, so the poll loop fired once, hung, and
+ * never rescheduled or logged, which looked exactly like Athena still
+ * rendering. A timeout also means one dropped request costs a retry instead
+ * of the whole presentation. */
+const ATHENA_REQUEST_TIMEOUT_MS = 15_000;
+
+export async function athenaProxyFetch(url: string, timeoutMs = ATHENA_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await expoFetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function pollHyperframeVideo(answerId: string): Promise<HyperframeVideoStatus> {
-  const res = await fetch(proxyUrl(`/answers/${encodeURIComponent(answerId)}/video`));
+  const res = await athenaProxyFetch(proxyUrl(`/answers/${encodeURIComponent(answerId)}/video`));
   if (!res.ok) throw new Error(`Video status request failed (${res.status})`);
   const data = await res.json();
   return {
