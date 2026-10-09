@@ -18,7 +18,7 @@
 //  - Web's own Fullscreen-API + CSS auto-hide becomes a local layout toggle
 //    (this player already lives inside AskAIAssistant's full-screen Modal)
 //    plus an expo-screen-orientation landscape lock.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio, type AVPlaybackStatus } from 'expo-av';
@@ -257,12 +257,25 @@ export function HyperframeAnswerPlayer({
   const [showCaption, setShowCaption] = useState(true);
   const [frameHtml, setFrameHtml] = useState<Record<number, string>>({});
   const [loadingBeat, setLoadingBeat] = useState(false);
+  // Measured space available to the stage. Sizing the 16:9 box from width
+  // alone made it taller than the screen in landscape, so it overflowed its
+  // centred container and the top of the slide was clipped behind the status
+  // bar. Web fits on both axes (min(w/1920, h/1080)); this does the same.
+  const [stageArea, setStageArea] = useState({ width: 0, height: 0 });
 
   // This player fills a statusBarTranslucent Modal and, in fullscreen, rotates
   // to landscape — so the system bars overlap it on every edge. In landscape
   // the navigation bar lands on whichever side the device rotated towards,
   // which is why the horizontal insets matter too.
   const insets = useSafeAreaInsets();
+
+  /** Largest 16:9 box that fits the measured area, like web's --hf-scale. */
+  const stageBox = useMemo(() => {
+    const { width: w, height: h } = stageArea;
+    if (w <= 0 || h <= 0) return null;
+    const width = Math.min(w, h * (BEAT_WIDTH / BEAT_HEIGHT));
+    return { width, height: width * (BEAT_HEIGHT / BEAT_WIDTH) };
+  }, [stageArea]);
 
   const beatCount = video?.html_paths.length ?? 0;
   const hasVideo = !!video && beatCount > 0;
@@ -581,60 +594,70 @@ export function HyperframeAnswerPlayer({
 
         {hasVideo && answerId && (
           <View style={styles.videoFrameBox}>
-            <View style={styles.videoWrapper}>
-              <Text style={styles.beatCounter}>
-                {currentIdx + 1} / {beatCount}
-              </Text>
-              {[currentIdx, currentIdx + 1]
-                .filter((i) => i >= 0 && i < beatCount && frameHtml[i])
-                .map((i) => (
-                  <View key={i} style={[StyleSheet.absoluteFill, { opacity: i === currentIdx ? 1 : 0 }]} pointerEvents={i === currentIdx ? 'auto' : 'none'}>
-                    <WebView
-                      ref={(el) => {
-                        webviewRefs.current[i] = el;
-                      }}
-                      originWhitelist={['*']}
-                      source={{ html: frameHtml[i], baseUrl: HYPERFRAME_BASE_URL }}
-                      style={styles.webview}
-                      scrollEnabled={false}
-                      javaScriptEnabled
-                      domStorageEnabled
-                      // Allow the injected document itself (now reported under
-                      // HYPERFRAME_BASE_URL) but still refuse to navigate away;
-                      // subresources like the GSAP CDN script are not routed
-                      // through this hook on either platform.
-                      onShouldStartLoadWithRequest={(request) =>
-                        request.url === 'about:blank' ||
-                        request.url.startsWith('data:') ||
-                        request.url.startsWith(HYPERFRAME_BASE_URL)
-                      }
-                      // Scale the fixed 1920x1080 canvas down to the box.
-                      scalesPageToFit
-                      onMessage={(e) => {
-                        askWarn('frame', `beat ${i + 1} page error: ${e.nativeEvent.data}`);
-                      }}
-                      onError={({ nativeEvent }) =>
-                        askWarn('frame', `beat ${i + 1} load error: ${nativeEvent.description}`)
-                      }
-                      onHttpError={({ nativeEvent }) =>
-                        askWarn('frame', `beat ${i + 1} HTTP ${nativeEvent.statusCode}`)
-                      }
-                      onLoadEnd={() => {
-                        frameReady.current[i] = true;
-                        if (i === currentIdxRef.current) {
-                          webviewRefs.current[i]?.injectJavaScript(GSAP_PLAY);
-                        } else {
-                          webviewRefs.current[i]?.injectJavaScript(GSAP_STOP);
+            <View
+              style={styles.videoArea}
+              onLayout={(e) => {
+                const { width, height } = e.nativeEvent.layout;
+                setStageArea((prev) =>
+                  prev.width === width && prev.height === height ? prev : { width, height },
+                );
+              }}
+            >
+              <View style={[styles.videoWrapper, stageBox ?? styles.videoWrapperFallback]}>
+                <Text style={styles.beatCounter}>
+                  {currentIdx + 1} / {beatCount}
+                </Text>
+                {[currentIdx, currentIdx + 1]
+                  .filter((i) => i >= 0 && i < beatCount && frameHtml[i])
+                  .map((i) => (
+                    <View key={i} style={[StyleSheet.absoluteFill, { opacity: i === currentIdx ? 1 : 0 }]} pointerEvents={i === currentIdx ? 'auto' : 'none'}>
+                      <WebView
+                        ref={(el) => {
+                          webviewRefs.current[i] = el;
+                        }}
+                        originWhitelist={['*']}
+                        source={{ html: frameHtml[i], baseUrl: HYPERFRAME_BASE_URL }}
+                        style={styles.webview}
+                        scrollEnabled={false}
+                        javaScriptEnabled
+                        domStorageEnabled
+                        // Allow the injected document itself (now reported under
+                        // HYPERFRAME_BASE_URL) but still refuse to navigate away;
+                        // subresources like the GSAP CDN script are not routed
+                        // through this hook on either platform.
+                        onShouldStartLoadWithRequest={(request) =>
+                          request.url === 'about:blank' ||
+                          request.url.startsWith('data:') ||
+                          request.url.startsWith(HYPERFRAME_BASE_URL)
                         }
-                      }}
-                    />
+                        // Scale the fixed 1920x1080 canvas down to the box.
+                        scalesPageToFit
+                        onMessage={(e) => {
+                          askWarn('frame', `beat ${i + 1} page error: ${e.nativeEvent.data}`);
+                        }}
+                        onError={({ nativeEvent }) =>
+                          askWarn('frame', `beat ${i + 1} load error: ${nativeEvent.description}`)
+                        }
+                        onHttpError={({ nativeEvent }) =>
+                          askWarn('frame', `beat ${i + 1} HTTP ${nativeEvent.statusCode}`)
+                        }
+                        onLoadEnd={() => {
+                          frameReady.current[i] = true;
+                          if (i === currentIdxRef.current) {
+                            webviewRefs.current[i]?.injectJavaScript(GSAP_PLAY);
+                          } else {
+                            webviewRefs.current[i]?.injectJavaScript(GSAP_STOP);
+                          }
+                        }}
+                      />
+                    </View>
+                  ))}
+                {loadingBeat && (
+                  <View style={styles.loadingOverlay} pointerEvents="none">
+                    <ActivityIndicator color="#fff" />
                   </View>
-                ))}
-              {loadingBeat && (
-                <View style={styles.loadingOverlay} pointerEvents="none">
-                  <ActivityIndicator color="#fff" />
-                </View>
-              )}
+                )}
+              </View>
             </View>
             {showCaption && captionText.length > 0 && (
               <View style={styles.textPanel}>
@@ -790,12 +813,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  videoWrapper: {
+  // Takes whatever height is left once the caption panel has its share, so
+  // measuring it gives the stage's true available space.
+  videoArea: {
     width: '100%',
-    aspectRatio: 16 / 9,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoWrapper: {
     backgroundColor: '#000',
     borderRadius: 12,
     overflow: 'hidden',
+  },
+  /** Used for the first frame only, before onLayout has measured. */
+  videoWrapperFallback: {
+    width: '100%',
+    aspectRatio: 16 / 9,
   },
   webview: {
     flex: 1,
