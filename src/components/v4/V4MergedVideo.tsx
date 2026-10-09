@@ -173,7 +173,14 @@ export const V4MergedVideo = forwardRef<V4MergedVideoRef, V4MergedVideoProps>(({
   }, [tryFallbackOrError]);
 
   return (
-    <View style={[styles.container, style]} pointerEvents="none">
+    <View
+      style={[styles.container, style]}
+      pointerEvents="none"
+      onLayout={(e) => {
+        const { x, y, width, height } = e.nativeEvent.layout;
+        console.log(`[V4MergedVideo] container layout: x=${x} y=${y} w=${width} h=${height}`);
+      }}
+    >
       <Video
         ref={vidRef}
         style={StyleSheet.absoluteFill}

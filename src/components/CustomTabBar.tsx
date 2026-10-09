@@ -111,12 +111,6 @@ export default function CustomTabBar({ state, navigation }: BottomTabBarProps) {
               onPress={() => navigateTab('MyNotes')}
             />
             <BarButton
-              isFocused={currentName === 'Courses'}
-              iconName={currentName === 'Courses' ? 'compass' : 'compass-outline'}
-              size={22}
-              onPress={() => navigateTab('Courses')}
-            />
-            <BarButton
               isFocused={currentName === 'Reels'}
               iconName={currentName === 'Reels' ? 'play-circle' : 'play-circle-outline'}
               size={24}

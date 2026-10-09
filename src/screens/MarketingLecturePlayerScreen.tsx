@@ -9,12 +9,13 @@ import {
   StatusBar,
   BackHandler,
   GestureResponderEvent,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio, Video, ResizeMode, AVPlaybackStatus } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import V4LectureNotesPanel from '../components/my-notes/V4LectureNotesPanel';
 import {
@@ -195,6 +196,7 @@ export default function MarketingLecturePlayerScreen() {
   }, [clearControlsTimer]);
 
   const toggleFullscreen = useCallback(() => {
+    console.log(`[MKT] toggleFullscreen called, current isFullscreen=${isFullscreen}`);
     if (isFullscreen) {
       leaveFullscreen();
       return;
@@ -481,7 +483,24 @@ export default function MarketingLecturePlayerScreen() {
   );
 
   return (
-    <View style={[styles.container, isFullscreen && styles.containerFullscreen]}>
+    <View
+      style={[
+        styles.container,
+        isFullscreen && styles.containerFullscreen,
+        isFullscreen && {
+          position: 'absolute',
+          top: -insets.top,
+          left: -insets.left,
+          right: -insets.right,
+          bottom: -insets.bottom,
+          backgroundColor: 'red',
+        },
+      ]}
+      onLayout={(e) => {
+        const { x, y, width, height } = e.nativeEvent.layout;
+        console.log(`[MKT FULLSCREEN] container layout: x=${x} y=${y} w=${width} h=${height}`);
+      }}
+    >
       <StatusBar
         hidden={isFullscreen}
         barStyle="light-content"
@@ -490,7 +509,13 @@ export default function MarketingLecturePlayerScreen() {
       {!isFullscreen && playerHeader()}
 
       {/* A single Video surface is resized between portrait and landscape. */}
-      <View style={[styles.videoStage, isFullscreen && styles.videoStageFullscreen]}>
+      <View
+        style={[styles.videoStage, isFullscreen && styles.videoStageFullscreen]}
+        onLayout={(e) => {
+          const { x, y, width, height } = e.nativeEvent.layout;
+          console.log(`[MKT] videoStage layout: x=${x} y=${y} w=${width} h=${height}`);
+        }}
+      >
         {loading && (
           <View style={styles.centerFill}>
             <ActivityIndicator size="large" color="#FFFFFF" />
@@ -515,11 +540,9 @@ export default function MarketingLecturePlayerScreen() {
         {!loading && !error && videoUrl && (
           <Video
             ref={videoRef}
-            // key forces a clean reload when the language (URL) changes —
-            // single Video surface at all times (Android constraint).
             key={videoUrl}
             source={{ uri: videoUrl }}
-            style={styles.video}
+            style={[styles.video, isFullscreen && styles.videoFullscreen]}
             resizeMode={ResizeMode.CONTAIN}
             shouldPlay={isPlaying}
             useNativeControls={false}
@@ -703,13 +726,21 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   videoStageFullscreen: {
-    flex: 1,
-    aspectRatio: undefined,
+    position: 'absolute',
+    top: 20,
+    left: 40,
+    right: 40,
+    bottom: 20,
   },
   video: {
     width: '100%',
     height: '100%',
     backgroundColor: '#000',
+  },
+  videoFullscreen: {
+    maxHeight: '80%',
+    maxWidth: '60%',
+    alignSelf: 'center',
   },
   controlsOverlay: {
     ...StyleSheet.absoluteFillObject,

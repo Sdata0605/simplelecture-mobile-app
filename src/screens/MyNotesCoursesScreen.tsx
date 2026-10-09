@@ -64,7 +64,7 @@ export default function MyNotesCoursesScreen() {
   };
 
   const browseCourses = () => {
-    navigation.navigate('MainTabs', { screen: 'Courses' } as any);
+    navigation.navigate('MainTabs', { screen: 'MyCourses' });
   };
 
   return (

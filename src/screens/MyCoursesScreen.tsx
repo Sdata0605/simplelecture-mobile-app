@@ -235,7 +235,7 @@ export default function MyCoursesScreen() {
                   : 'Explore courses to get started'}
               </Text>
               {!searchQuery && selectedCategory === 'all' && (
-                <TouchableOpacity onPress={() => navigation.navigate('MainTabs', { screen: 'Courses' })}>
+                <TouchableOpacity onPress={() => navigation.navigate('MainTabs', { screen: 'MyCourses' })}>
                   <LinearGradient
                     colors={[colors.primary, '#4ADE80']}
                     style={styles.exploreButton}

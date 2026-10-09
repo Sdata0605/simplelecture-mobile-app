@@ -21,6 +21,8 @@
         "UIBackgroundModes": [
           "remote-notification"
         ],
+        "NSMicrophoneUsageDescription": "Simple Lecture uses your microphone so you can ask the AI assistant questions out loud while watching a lecture.",
+        "NSSpeechRecognitionUsageDescription": "Simple Lecture uses speech recognition to turn your spoken questions into text for the AI assistant.",
         "LSApplicationQueriesSchemes": [
           "tez",
           "phonepe",
@@ -36,8 +38,10 @@
             ],
             "CFBundleURLName": "com.edulearn.mobile"
           }
-        ]
-      }
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "buildNumber": "4"
     },
     "android": {
       "adaptiveIcon": {
@@ -46,7 +50,7 @@
       },
       "package": "com.edulearn.mobile",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 11,
+      "versionCode": 14,
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.RECORD_AUDIO"
@@ -73,10 +77,30 @@
           "cameraPermission": "Allow Simple Lecture to use your camera to capture answer images."
         }
       ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Simple Lecture uses your microphone so you can ask the AI assistant questions out loud while watching a lecture.",
+          "speechRecognitionPermission": "Simple Lecture uses speech recognition to turn your spoken questions into text for the AI assistant.",
+          "androidSpeechServicePackages": []
+        }
+      ],
       "@react-native-community/datetimepicker",
       "expo-asset",
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static",
+            "forceStaticLinking": [
+              "RNFBApp",
+              "RNFBMessaging"
+            ]
+          }
+        }
+      ]
     ],
     "web": {
       "favicon": "./assets/favicon.png"

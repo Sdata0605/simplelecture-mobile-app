@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useAvailableLanguagesForLecture } from '../hooks/useAvailableLanguagesForLecture';
 import {
   View,
   Text,
@@ -24,6 +25,7 @@ import {
 } from 'react-native';
 import { filterLecturesByVisibility, getTopicLectureVisibility } from '../services/aiLectureService';
 import { NotesBookReader } from '../components/learning/notes/NotesBookReader';
+import ImportantNotesTab from '../components/learning/notes/ImportantNotesTab';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { Audio, Video, ResizeMode } from 'expo-av';
@@ -138,6 +140,7 @@ const TABS = [
   { id: 'videos', label: 'Classes', icon: 'play-circle-outline' },
   { id: 'ai', label: 'AI', icon: 'sparkles-outline' },
   { id: 'notes', label: 'Notes', icon: 'document-text-outline' },
+  { id: 'important-notes', label: 'Important Notes', icon: 'bookmark-outline' },
   { id: 'questions', label: 'Questions', icon: 'list-outline' },
   { id: 'solutions', label: 'Solutions', icon: 'bulb-outline' },
   { id: 'assignments', label: 'Assignments', icon: 'clipboard-outline' },
@@ -3223,7 +3226,7 @@ export default function TopicDetailsScreen() {
       return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    // Handle video click — marketing AI lectures use the V4 player,
+    // Handle video click — marketing AI lectures use the V5 player,
     // normal (non-marketing) AI lectures use the AI Lecture Player.
     const handleVideoPress = (video: TopicVideo) => {
       if (video.video_platform === 'ai_generated') {
@@ -3231,8 +3234,8 @@ export default function TopicDetailsScreen() {
         const jobId = video.external_job_id;
         if (jobId) {
           if (video.is_marketing === true) {
-            console.log('[TopicDetails] Marketing lecture — routing to Marketing player, jobId:', jobId);
-            navigation.navigate('MarketingLecturePlayer', {
+            console.log('[TopicDetails] Marketing lecture — routing to V5 player, jobId:', jobId);
+            navigation.navigate('V5Player', {
               jobId,
               title: video.title || topic?.title || 'Lecture',
               topicId: topicId || undefined,
@@ -3318,131 +3321,18 @@ export default function TopicDetailsScreen() {
 
     // Render AI Lecture Card (SimpleLectures style)
     const renderAILectureCard = (video: TopicVideo) => (
-      <View key={video.id} style={styles.simpleLecturesCard}>
-        {/* Tappable Video Area */}
-        <TouchableOpacity
-          onPress={() => handleVideoPress(video)}
-          activeOpacity={0.9}
-        >
-          {/* Purple Gradient Header */}
-          <LinearGradient
-            colors={['#1a1a2e', '#2d1b4e', '#4a2c6e']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.simpleLecturesHeader}
-          >
-          {/* SimpleLectures Branding */}
-          <View style={styles.simpleLecturesBranding}>
-            <View style={styles.simpleLecturesLogo}>
-              <View style={[styles.simpleLecturesLogoSquare, { backgroundColor: '#FF6B6B' }]} />
-              <View style={[styles.simpleLecturesLogoSquare, { backgroundColor: '#4ECDC4' }]} />
-              <View style={[styles.simpleLecturesLogoSquare, { backgroundColor: '#FFE66D' }]} />
-              <View style={[styles.simpleLecturesLogoSquare, { backgroundColor: '#95E1D3' }]} />
-            </View>
-            <Text style={styles.simpleLecturesBrandName}>
-              <Text style={{ color: '#A78BFA' }}>Simple</Text>
-              <Text style={{ color: colors.white }}>Lectures</Text>
-            </Text>
-          </View>
-
-          {/* Play Button */}
-          <View style={styles.simpleLecturesPlayContainer}>
-            <View style={styles.simpleLecturesPlayButton}>
-              <Ionicons name="play" size={28} color={colors.white} style={{ marginLeft: 4 }} />
-            </View>
-          </View>
-
-          {/* AI-Powered Learning Badge */}
-          <View style={styles.simpleLecturesAIBadge}>
-            <Ionicons name="sparkles" size={14} color="#A78BFA" />
-            <Text style={styles.simpleLecturesAIBadgeText}>AI-Powered Learning</Text>
-          </View>
-        </LinearGradient>
-
-        {/* Card Content */}
-        <View style={styles.simpleLecturesContent}>
-          <Text style={styles.simpleLecturesTitle} numberOfLines={2}>
-            {video.title || topic?.title}
-          </Text>
-          <Text style={styles.simpleLecturesDescription}>
-            AI-generated video lecture with native player
-          </Text>
-
-          {/* Watch In Languages */}
-          <View style={styles.simpleLecturesLanguages}>
-            <Text style={styles.simpleLecturesWatchIn}>Watch in:</Text>
-            <View style={styles.simpleLecturesLanguageBadges}>
-              <TouchableOpacity
-                onPress={() => setSelectedAILanguage('english')}
-                activeOpacity={0.7}
-              >
-                <View style={[
-                  styles.simpleLecturesLangBadge,
-                  selectedAILanguage === 'english' && { borderColor: colors.primary, borderWidth: 1.5, backgroundColor: '#FFFFFF' }
-                ]}>
-                  <View style={styles.simpleLecturesLangIcon}>
-                    <Text style={styles.simpleLecturesLangIconText}>GB</Text>
-                  </View>
-                  <Text style={styles.simpleLecturesLangText}>English</Text>
-                </View>
-              </TouchableOpacity>
-              {purchasedLanguages
-                .filter(lang => lang !== 'english' && courseAvailableLanguages.includes(lang))
-                .map(lang => {
-                  const langInfo = LANGUAGE_DATA[lang] || { label: lang, native: lang, flag: 'IN' };
-                  return (
-                    <TouchableOpacity
-                      key={lang}
-                      onPress={() => setSelectedAILanguage(selectedAILanguage === lang ? 'english' : lang)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={[
-                        styles.simpleLecturesLangBadge,
-                        selectedAILanguage === lang && { borderColor: colors.primary, borderWidth: 1.5, backgroundColor: '#FFFFFF' }
-                      ]}>
-                        <View style={styles.simpleLecturesLangIcon}>
-                          <Text style={styles.simpleLecturesLangIconText}>{langInfo.flag}</Text>
-                        </View>
-                        <Text style={styles.simpleLecturesLangText}>{langInfo.label}</Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-            </View>
-          </View>
-        </View>
-        </TouchableOpacity>
-
-        {(() => {
-          const unpurchasedCount = courseAvailableLanguages.filter(
-            lang => lang !== 'english' && !purchasedLanguages.includes(lang)
-          ).length;
-          const showUnlock = languageCourseId &&
-            courseAvailableLanguages.length > 1 &&
-            unpurchasedCount > 0 &&
-            (languageTopupPrice || 0) > 0;
-          if (!showUnlock) return null;
-          return (
-            <TouchableOpacity
-              onPress={() => navigation.navigate('LanguageTopup', { subjectId: subjectId || topic?.subject_id || '' })}
-              activeOpacity={0.8}
-              style={styles.simpleLecturesUnlockContainer}
-              data-testid="button-unlock-language"
-            >
-              <LinearGradient
-                colors={[colors.primary, '#22C55E']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.simpleLecturesUnlockButton}
-              >
-                <Ionicons name="globe-outline" size={18} color={colors.white} />
-                <Text style={styles.simpleLecturesUnlockText}>Unlock Your Language</Text>
-                <Ionicons name="sparkles" size={16} color={colors.white} />
-              </LinearGradient>
-            </TouchableOpacity>
-          );
-        })()}
-      </View>
+      <AILectureCard
+        video={video}
+        topic={topic}
+        purchasedLanguages={purchasedLanguages}
+        courseAvailableLanguages={courseAvailableLanguages}
+        languageCourseId={languageCourseId}
+        languageTopupPrice={languageTopupPrice}
+        selectedAILanguage={selectedAILanguage}
+        onSelectLanguage={setSelectedAILanguage}
+        onPress={() => handleVideoPress(video)}
+        onPressUnlock={() => navigation.navigate('LanguageTopup', { subjectId: subjectId || topic?.subject_id || '' })}
+      />
     );
 
     // Render Regular Video Card (YouTube/Vimeo)
@@ -5610,6 +5500,16 @@ export default function TopicDetailsScreen() {
       topicId={topicId}
       chapterId={routeChapterId}
       subjectId={subjectId}
+      topicTitle={topicTitle || topic?.title}
+    />
+  );
+
+  // Generated revision notes for this topic, served by the same notes API the
+  // web app's Important Notes tab uses.
+  const renderImportantNotesTab = () => (
+    <ImportantNotesTab
+      chapterId={routeChapterId || topic?.chapter_id}
+      topicId={topicId}
       topicTitle={topicTitle || topic?.title}
     />
   );
@@ -7998,6 +7898,7 @@ export default function TopicDetailsScreen() {
       case 'videos': return renderVideosTab();
       case 'ai': return renderAiTab();
       case 'notes': return renderNotesTab();
+      case 'important-notes': return renderImportantNotesTab();
       case 'questions': return renderQuestionsTab();
       case 'solutions': return renderSolutionsTab();
       case 'dpp': return renderDppTab();
@@ -8052,7 +7953,7 @@ export default function TopicDetailsScreen() {
         )}
       </LinearGradient>
 
-      {activeTab === 'doubts' || activeTab === 'reels' || activeTab === 'ai' || activeTab === 'notes' ? (
+      {activeTab === 'doubts' || activeTab === 'reels' || activeTab === 'ai' || activeTab === 'notes' || activeTab === 'important-notes' ? (
         <View style={[styles.content, { flex: 1 }]}>
           {renderContent()}
         </View>
@@ -13592,3 +13493,172 @@ const styles = StyleSheet.create({
     textAlign: 'center' as const,
   },
 });
+
+// --- Standalone AI Lecture Card (extracted so the language hook can be called at top level) ---
+interface AILectureCardProps {
+  video: TopicVideo;
+  topic: any;
+  purchasedLanguages: string[];
+  courseAvailableLanguages: string[];
+  languageCourseId: string;
+  languageTopupPrice: number;
+  selectedAILanguage: string | null;
+  onSelectLanguage: (lang: string | null) => void;
+  onPress: () => void;
+  onPressUnlock: () => void;
+}
+
+const LANGUAGE_DATA: Record<string, { label: string; native: string; flag: string }> = {
+  english:   { label: 'English',   native: 'English',  flag: 'GB' },
+  hindi:     { label: 'Hindi',     native: 'हिन्दी',    flag: 'IN' },
+  kannada:  { label: 'Kannada',   native: 'ಕನ್ನಡ',    flag: 'IN' },
+  marathi:  { label: 'Marathi',   native: 'मराठी',    flag: 'IN' },
+  tamil:    { label: 'Tamil',     native: 'தமிழ்',    flag: 'IN' },
+  telugu:   { label: 'Telugu',    native: 'తెలుగు',   flag: 'IN' },
+  malayalam:{ label: 'Malayalam', native: 'മലയാളം',  flag: 'IN' },
+  bengali:  { label: 'Bengali',   native: 'বাংলা',    flag: 'IN' },
+  gujarati: { label: 'Gujarati',  native: 'ગુજરાતી',  flag: 'IN' },
+  punjabi:  { label: 'Punjabi',   native: 'ਪੰਜਾਬੀ',  flag: 'IN' },
+  odia:     { label: 'Odia',      native: 'ଓଡ଼ିଆ',    flag: 'IN' },
+  assamese: { label: 'Assamese',  native: 'অসমীয়া', flag: 'IN' },
+};
+
+function AILectureCard({
+  video,
+  topic,
+  purchasedLanguages,
+  courseAvailableLanguages,
+  languageCourseId,
+  languageTopupPrice,
+  selectedAILanguage,
+  onSelectLanguage,
+  onPress,
+  onPressUnlock,
+}: AILectureCardProps) {
+  const { languages: lectureLanguages, isLoading: languagesLoading } =
+    useAvailableLanguagesForLecture(video.external_job_id);
+
+  const availableBadgeLanguages = lectureLanguages.filter(
+    lang => lang !== 'english' && purchasedLanguages.includes(lang),
+  );
+
+  return (
+    <View style={styles.simpleLecturesCard}>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.9}>
+        <LinearGradient
+          colors={['#1a1a2e', '#2d1b4e', '#4a2c6e']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.simpleLecturesHeader}
+        >
+          <View style={styles.simpleLecturesBranding}>
+            <View style={styles.simpleLecturesLogo}>
+              <View style={[styles.simpleLecturesLogoSquare, { backgroundColor: '#FF6B6B' }]} />
+              <View style={[styles.simpleLecturesLogoSquare, { backgroundColor: '#4ECDC4' }]} />
+              <View style={[styles.simpleLecturesLogoSquare, { backgroundColor: '#FFE66D' }]} />
+              <View style={[styles.simpleLecturesLogoSquare, { backgroundColor: '#95E1D3' }]} />
+            </View>
+            <Text style={styles.simpleLecturesBrandName}>
+              <Text style={{ color: '#A78BFA' }}>Simple</Text>
+              <Text style={{ color: colors.white }}>Lectures</Text>
+            </Text>
+          </View>
+
+          <View style={styles.simpleLecturesPlayContainer}>
+            <View style={styles.simpleLecturesPlayButton}>
+              <Ionicons name="play" size={28} color={colors.white} style={{ marginLeft: 4 }} />
+            </View>
+          </View>
+
+          <View style={styles.simpleLecturesAIBadge}>
+            <Ionicons name="sparkles" size={14} color="#A78BFA" />
+            <Text style={styles.simpleLecturesAIBadgeText}>AI-Powered Learning</Text>
+          </View>
+        </LinearGradient>
+
+        <View style={styles.simpleLecturesContent}>
+          <Text style={styles.simpleLecturesTitle} numberOfLines={2}>
+            {video.title || topic?.title}
+          </Text>
+          <Text style={styles.simpleLecturesDescription}>
+            AI-generated video lecture with native player
+          </Text>
+
+          <View style={styles.simpleLecturesLanguages}>
+            <Text style={styles.simpleLecturesWatchIn}>Watch in:</Text>
+            <View style={styles.simpleLecturesLanguageBadges}>
+              <TouchableOpacity
+                onPress={() => onSelectLanguage('english')}
+                activeOpacity={0.7}
+              >
+                <View style={[
+                  styles.simpleLecturesLangBadge,
+                  selectedAILanguage === 'english' && { borderColor: colors.primary, borderWidth: 1.5, backgroundColor: '#FFFFFF' }
+                ]}>
+                  <View style={styles.simpleLecturesLangIcon}>
+                    <Text style={styles.simpleLecturesLangIconText}>GB</Text>
+                  </View>
+                  <Text style={styles.simpleLecturesLangText}>English</Text>
+                </View>
+              </TouchableOpacity>
+
+              {languagesLoading
+                ? <View style={{ width: 40, height: 24, justifyContent: 'center' }}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  </View>
+                : availableBadgeLanguages.map(lang => {
+                    const langInfo = LANGUAGE_DATA[lang] || { label: lang, native: lang, flag: 'IN' };
+                    return (
+                      <TouchableOpacity
+                        key={lang}
+                        onPress={() => onSelectLanguage(selectedAILanguage === lang ? 'english' : lang)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={[
+                          styles.simpleLecturesLangBadge,
+                          selectedAILanguage === lang && { borderColor: colors.primary, borderWidth: 1.5, backgroundColor: '#FFFFFF' }
+                        ]}>
+                          <View style={styles.simpleLecturesLangIcon}>
+                            <Text style={styles.simpleLecturesLangIconText}>{langInfo.flag}</Text>
+                          </View>
+                          <Text style={styles.simpleLecturesLangText}>{langInfo.label}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+            </View>
+          </View>
+        </View>
+      </TouchableOpacity>
+
+      {(() => {
+        const unpurchasedCount = courseAvailableLanguages.filter(
+          lang => lang !== 'english' && !purchasedLanguages.includes(lang)
+        ).length;
+        const showUnlock = languageCourseId &&
+          courseAvailableLanguages.length > 1 &&
+          unpurchasedCount > 0 &&
+          (languageTopupPrice || 0) > 0;
+        if (!showUnlock) return null;
+        return (
+          <TouchableOpacity
+            onPress={onPressUnlock}
+            activeOpacity={0.8}
+            style={styles.simpleLecturesUnlockContainer}
+          >
+            <LinearGradient
+              colors={[colors.primary, '#22C55E']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.simpleLecturesUnlockButton}
+            >
+              <Ionicons name="globe-outline" size={18} color={colors.white} />
+              <Text style={styles.simpleLecturesUnlockText}>Unlock Your Language</Text>
+              <Ionicons name="sparkles" size={16} color={colors.white} />
+            </LinearGradient>
+          </TouchableOpacity>
+        );
+      })()}
+    </View>
+  );
+}

@@ -139,11 +139,11 @@ function ClassesTabContent({ topicId, chapterId, topicVideoId, topicVideoPlatfor
       onBuy();
       return;
     }
-    // Marketing lectures use the V4 player; normal lectures use the AI Lecture Player.
+    // Marketing lectures use the V5 player; normal lectures use the AI Lecture Player.
     // external_job_id is the required identifier for both.
     if (lec.external_job_id) {
       if (lec.is_marketing === true) {
-        (navigation.navigate as any)('MarketingLecturePlayer', {
+        (navigation.navigate as any)('V5Player', {
           jobId: lec.external_job_id,
           title: lec.document_name || topicTitle,
           // Preview cards have no language picker — start deterministically in English.

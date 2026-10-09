@@ -2,9 +2,11 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
   StatusBar, Dimensions, Animated, Easing, Alert,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets, SafeAreaProvider } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView } from 'react-native';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -641,11 +643,37 @@ export default function V4PlayerScreen() {
   }
 
   if (isFullscreen) {
+    const { width: screenW, height: screenH_val } = Dimensions.get('window');
+    console.log(`[V4Player FULLSCREEN] screen=${screenW}x${screenH_val} insets={top:${insets.top} left:${insets.left} right:${insets.right} bottom:${insets.bottom}}`);
     return (
-      <View style={styles.screenFS}>
+      <View
+        style={[
+          styles.screenFS,
+          {
+            position: 'absolute',
+            top: -insets.top,
+            left: -insets.left,
+            right: -insets.right,
+            bottom: -insets.bottom,
+            backgroundColor: 'red',
+          },
+        ]}
+        onLayout={(e) => {
+          const { x, y, width, height } = e.nativeEvent.layout;
+          console.log(`[V4Player] screenFS container layout: x=${x} y=${y} w=${width} h=${height}`);
+        }}
+      >
         {isPlaying && <KeepScreenAwake />}
         <StatusBar barStyle="light-content" backgroundColor={C.bg} hidden />
-        <TouchableOpacity style={StyleSheet.absoluteFill} onPress={handleStageTap} activeOpacity={1}>
+        <TouchableOpacity
+          style={{ backgroundColor: 'blue', flex: 1 }}
+          onPress={handleStageTap}
+          activeOpacity={1}
+          onLayout={(e) => {
+            const { x, y, width, height } = e.nativeEvent.layout;
+            console.log(`[V4Player] tapTarget layout: x=${x} y=${y} w=${width} h=${height}`);
+          }}
+        >
           {/* Merged teaching video — single pre-composited file per section */}
           <View style={[StyleSheet.absoluteFill, { opacity: 0 }]}>
             <V4MergedVideo ref={mergedRef} />
@@ -993,6 +1021,7 @@ const styles = StyleSheet.create({
   screenFS: {
     flex: 1,
     backgroundColor: '#000',
+    position: 'relative',
   },
   fsOverlay: {
     ...StyleSheet.absoluteFillObject,

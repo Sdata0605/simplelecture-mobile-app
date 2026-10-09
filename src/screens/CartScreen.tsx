@@ -165,7 +165,7 @@ export default function CartScreen() {
           </View>
           <Text style={styles.emptyTitle}>Your cart is empty</Text>
           <Text style={styles.emptySubtitle}>Browse our courses and find something you love!</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('MainTabs', { screen: 'Courses' })}>
+          <TouchableOpacity onPress={() => navigation.navigate('MyCourses')}>
             <LinearGradient
               colors={[colors.primary, '#4ADE80']}
               style={styles.browseButton}

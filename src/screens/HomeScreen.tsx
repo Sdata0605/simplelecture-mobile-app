@@ -41,10 +41,10 @@ export default function HomeScreen() {
   const { openSidebar } = useSidebar();
   const { aiLimit: sslcAiLimit, doubtsLimit: sslcDoubtsLimit } = useCourseFreePreviewLimits(SSLC_COURSE_ID);
 
-  const [featuredCourses, setFeaturedCourses] = useState<ExploreCourse[]>([]);
-  const [newestCourses, setNewestCourses] = useState<ExploreCourse[]>([]);
-  const [bestCourses, setBestCourses] = useState<ExploreCourse[]>([]);
-  const [enrolledCourses, setEnrolledCourses] = useState<EnrolledCourseWithCategory[]>([]);
+  const [featuredMyCourses, setFeaturedMyCourses] = useState<ExploreCourse[]>([]);
+  const [newestMyCourses, setNewestMyCourses] = useState<ExploreCourse[]>([]);
+  const [bestMyCourses, setBestMyCourses] = useState<ExploreCourse[]>([]);
+  const [enrolledMyCourses, setEnrolledMyCourses] = useState<EnrolledCourseWithCategory[]>([]);
   const [loadingFeatured, setLoadingFeatured] = useState(true);
   const [loadingNewest, setLoadingNewest] = useState(true);
   const [loadingBest, setLoadingBest] = useState(true);
@@ -59,7 +59,7 @@ export default function HomeScreen() {
     try {
       // Purchased / enrolled courses for the signed-in user (shown in their own section)
       const enrolledPromise = user?.id
-        ? supabase.getEnrolledCoursesWithCategories(user.id)
+        ? supabase.getEnrolledMyCoursesWithCategories(user.id)
         : Promise.resolve({ success: true, courses: [] as EnrolledCourseWithCategory[] });
 
       let savedInterests: string[] = [];
@@ -88,7 +88,7 @@ export default function HomeScreen() {
       if (categoryIds.length > 0) {
         // Personalized: derive all discovery sections from the category-restricted pool only
         const [poolRes, enrolledRes] = await Promise.all([
-          supabase.getCoursesByCategory(categoryIds),
+          supabase.getMyCoursesByCategory(categoryIds),
           enrolledPromise,
         ]);
 
@@ -113,31 +113,31 @@ export default function HomeScreen() {
             )
             .slice(0, 5);
 
-          setFeaturedCourses(featured);
-          setNewestCourses(newest);
-          setBestCourses(best);
+          setFeaturedMyCourses(featured);
+          setNewestMyCourses(newest);
+          setBestMyCourses(best);
         } else {
           // Selected categories have no courses yet -> graceful featured fallback
-          const fallbackRes = await supabase.getFeaturedCourses(3);
-          setFeaturedCourses(fallbackRes.success && fallbackRes.courses ? fallbackRes.courses : []);
-          setNewestCourses([]);
-          setBestCourses([]);
+          const fallbackRes = await supabase.getFeaturedMyCourses(3);
+          setFeaturedMyCourses(fallbackRes.success && fallbackRes.courses ? fallbackRes.courses : []);
+          setNewestMyCourses([]);
+          setBestMyCourses([]);
         }
 
-        setEnrolledCourses(enrolledRes.success && enrolledRes.courses ? enrolledRes.courses : []);
+        setEnrolledMyCourses(enrolledRes.success && enrolledRes.courses ? enrolledRes.courses : []);
       } else {
         // No saved interests -> fall back to the prior all-category behavior so Home isn't empty
         const [featuredRes, newestRes, bestRes, enrolledRes] = await Promise.all([
-          supabase.getFeaturedCourses(3),
-          supabase.getNewestCourses(5),
-          supabase.getBestCourses(5),
+          supabase.getFeaturedMyCourses(3),
+          supabase.getNewestMyCourses(5),
+          supabase.getBestMyCourses(5),
           enrolledPromise,
         ]);
 
-        setFeaturedCourses(featuredRes.success && featuredRes.courses ? featuredRes.courses : []);
-        setNewestCourses(newestRes.success && newestRes.courses ? newestRes.courses : []);
-        setBestCourses(bestRes.success && bestRes.courses ? bestRes.courses : []);
-        setEnrolledCourses(enrolledRes.success && enrolledRes.courses ? enrolledRes.courses : []);
+        setFeaturedMyCourses(featuredRes.success && featuredRes.courses ? featuredRes.courses : []);
+        setNewestMyCourses(newestRes.success && newestRes.courses ? newestRes.courses : []);
+        setBestMyCourses(bestRes.success && bestRes.courses ? bestRes.courses : []);
+        setEnrolledMyCourses(enrolledRes.success && enrolledRes.courses ? enrolledRes.courses : []);
       }
     } finally {
       setLoadingFeatured(false);
@@ -194,7 +194,7 @@ export default function HomeScreen() {
               <View style={styles.headerActions}>
                 <TouchableOpacity
                   style={styles.searchIconButton}
-                  onPress={() => navigation.navigate('MainTabs', { screen: 'Courses' })}
+                  onPress={() => navigation.navigate('MainTabs', { screen: 'MyCourses' })}
                   data-testid="button-search-courses"
                 >
                   <View style={styles.searchIconInner}>
@@ -235,7 +235,7 @@ export default function HomeScreen() {
             }
           >
             <HomeHeroBanner
-              onPrimaryPress={() => navigation.navigate('MainTabs', { screen: 'Courses' })}
+              onPrimaryPress={() => navigation.navigate('MainTabs', { screen: 'MyCourses' })}
               onPreviewPress={() =>
                 navigation.navigate('LearningPath', {
                   courseId: SSLC_COURSE_ID,
@@ -249,7 +249,7 @@ export default function HomeScreen() {
 
             <HeroVideoBanner />
 
-            {enrolledCourses.length > 0 && (
+            {enrolledMyCourses.length > 0 && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <View style={styles.sectionTitleRow}>
@@ -265,7 +265,7 @@ export default function HomeScreen() {
                 </View>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
                   <View style={styles.coursesRow}>
-                    {enrolledCourses.map((course) => (
+                    {enrolledMyCourses.map((course) => (
                       <TouchableOpacity
                         key={course.id}
                         style={styles.courseCard}
@@ -313,9 +313,9 @@ export default function HomeScreen() {
                   <View style={styles.sectionIconContainer}>
                     <Ionicons name="star" size={18} color={colors.primary} />
                   </View>
-                  <Text style={styles.sectionTitle}>Featured Courses</Text>
+                  <Text style={styles.sectionTitle}>Featured MyCourses</Text>
                 </View>
-                <TouchableOpacity style={styles.viewAllButton} onPress={() => navigation.navigate('MainTabs', { screen: 'Courses' })}>
+                <TouchableOpacity style={styles.viewAllButton} onPress={() => navigation.navigate('MainTabs', { screen: 'MyCourses' })}>
                   <Text style={styles.viewAll}>View All</Text>
                   <Ionicons name="chevron-forward" size={16} color={colors.primary} />
                 </TouchableOpacity>
@@ -323,7 +323,7 @@ export default function HomeScreen() {
               
               {loadingFeatured ? (
                 <CourseCardSkeleton variant="featured" />
-              ) : featuredCourses.length === 0 ? (
+              ) : featuredMyCourses.length === 0 ? (
                 <View style={styles.emptyState}>
                   <View style={styles.emptyIconContainer}>
                     <Ionicons name="school-outline" size={40} color={colors.primary} />
@@ -333,7 +333,7 @@ export default function HomeScreen() {
               ) : (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
                   <View style={styles.coursesRow}>
-                    {featuredCourses.map((course) => (
+                    {featuredMyCourses.map((course) => (
                       <TouchableOpacity 
                         key={course.id}
                         style={styles.courseCard}
@@ -405,9 +405,9 @@ export default function HomeScreen() {
                   <View style={styles.sectionIconContainer}>
                     <Ionicons name="sparkles" size={18} color={colors.primary} />
                   </View>
-                  <Text style={styles.sectionTitle}>Newest Courses</Text>
+                  <Text style={styles.sectionTitle}>Newest MyCourses</Text>
                 </View>
-                <TouchableOpacity style={styles.viewAllButton} onPress={() => navigation.navigate('MainTabs', { screen: 'Courses' })}>
+                <TouchableOpacity style={styles.viewAllButton} onPress={() => navigation.navigate('MainTabs', { screen: 'MyCourses' })}>
                   <Text style={styles.viewAll}>View All</Text>
                   <Ionicons name="chevron-forward" size={16} color={colors.primary} />
                 </TouchableOpacity>
@@ -420,7 +420,7 @@ export default function HomeScreen() {
                     <CourseCardSkeleton variant="compact" />
                   </View>
                 </ScrollView>
-              ) : newestCourses.length === 0 ? (
+              ) : newestMyCourses.length === 0 ? (
                 <View style={styles.emptyState}>
                   <View style={styles.emptyIconContainer}>
                     <Ionicons name="school-outline" size={40} color={colors.primary} />
@@ -430,7 +430,7 @@ export default function HomeScreen() {
               ) : (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
                   <View style={styles.coursesRow}>
-                    {newestCourses.map((course) => (
+                    {newestMyCourses.map((course) => (
                       <TouchableOpacity 
                         key={course.id} 
                         style={styles.courseCard}
@@ -504,7 +504,7 @@ export default function HomeScreen() {
                   </View>
                   <Text style={styles.sectionTitle}>Best Rated</Text>
                 </View>
-                <TouchableOpacity style={styles.viewAllButton} onPress={() => navigation.navigate('MainTabs', { screen: 'Courses' })}>
+                <TouchableOpacity style={styles.viewAllButton} onPress={() => navigation.navigate('MainTabs', { screen: 'MyCourses' })}>
                   <Text style={styles.viewAll}>View All</Text>
                   <Ionicons name="chevron-forward" size={16} color={colors.primary} />
                 </TouchableOpacity>
@@ -518,7 +518,7 @@ export default function HomeScreen() {
                     <CourseCardSkeleton variant="compact" />
                   </View>
                 </ScrollView>
-              ) : bestCourses.length === 0 ? (
+              ) : bestMyCourses.length === 0 ? (
                 <View style={styles.emptyState}>
                   <View style={styles.emptyIconContainer}>
                     <Ionicons name="ribbon-outline" size={40} color={colors.primary} />
@@ -528,7 +528,7 @@ export default function HomeScreen() {
               ) : (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
                   <View style={styles.coursesRow}>
-                    {bestCourses.map((course) => (
+                    {bestMyCourses.map((course) => (
                       <TouchableOpacity 
                         key={course.id} 
                         style={styles.courseCard}

@@ -1665,6 +1665,46 @@ class SupabaseService {
     }
   }
 
+  // Gates the hands-free "Ask AI" voice assistant: only available once an
+  // admin has linked this subject (and, when asking about a specific topic,
+  // that topic) to Athena. Mirrors the web app's RecordedVideos.tsx
+  // `athenaLink` query exactly (same two tables/columns), written as a
+  // hand-rolled PostgREST fetch to match this file's existing convention —
+  // mobile has no @supabase/supabase-js.
+  async getAthenaLink(
+    subjectId: string,
+    topicId?: string,
+  ): Promise<{ athenaSubjectId: string | null; athenaTopicId: string | null; subjectName: string | null }> {
+    try {
+      const accessToken = await this.getAccessToken();
+      if (!accessToken) return { athenaSubjectId: null, athenaTopicId: null, subjectName: null };
+
+      const subjectRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/popular_subjects?select=athena_subject_id,name&id=eq.${subjectId}`,
+        { method: 'GET', headers: { ...this.headers, 'Authorization': `Bearer ${accessToken}` } },
+      );
+      const subjectRows = subjectRes.ok ? await subjectRes.json() : [];
+      const subjectRow = Array.isArray(subjectRows) ? subjectRows[0] : null;
+      if (!subjectRow?.athena_subject_id) {
+        return { athenaSubjectId: null, athenaTopicId: null, subjectName: subjectRow?.name ?? null };
+      }
+
+      let athenaTopicId: string | null = null;
+      if (topicId) {
+        const topicRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/subject_topics?select=athena_topic_id&id=eq.${topicId}`,
+          { method: 'GET', headers: { ...this.headers, 'Authorization': `Bearer ${accessToken}` } },
+        );
+        const topicRows = topicRes.ok ? await topicRes.json() : [];
+        athenaTopicId = (Array.isArray(topicRows) ? topicRows[0]?.athena_topic_id : null) ?? null;
+      }
+
+      return { athenaSubjectId: subjectRow.athena_subject_id, athenaTopicId, subjectName: subjectRow.name ?? null };
+    } catch {
+      return { athenaSubjectId: null, athenaTopicId: null, subjectName: null };
+    }
+  }
+
   async getChapterTopics(chapterIds: string[]): Promise<{ success: boolean; topics?: Topic[]; error?: string }> {
     try {
       const accessToken = await this.getAccessToken();

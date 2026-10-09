@@ -99,10 +99,7 @@ export default function BlogDetailScreen() {
 
   const handleViewCourse = () => {
     if (!post?.courses) return;
-    navigation.navigate('MainTabs', {
-      screen: 'Courses',
-      params: { searchQuery: post.courses.name },
-    });
+    navigation.navigate('CourseDetails', { courseId: post.courses.id });
   };
 
   if (loading) {

@@ -30,11 +30,14 @@
  *   }
  *   status ∈ 'idle'|'loading'|'saving'|'saved'|'saved_local'|'error'
  */
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator,
+  Keyboard, Platform, Dimensions, KeyboardAvoidingView,
 } from 'react-native';
-import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
+import Reanimated, {
+  useSharedValue, withSpring, withTiming, useAnimatedStyle,
+} from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { EdgeInsets } from 'react-native-safe-area-context';
 import {
@@ -47,6 +50,9 @@ import {
   NoteSaveStatus,
 } from '../../hooks/useStudentNoteEditor';
 import { useAuth } from '../../context/AuthContext';
+
+// Sheet may occupy up to 85% of whatever space is left above the keyboard.
+const BOTTOM_SHEET_MAX_RATIO = 0.85;
 
 const C = {
   bg: '#0d1117',
@@ -124,12 +130,73 @@ function NotesEditor({
   // (its documented lecture-player override) rather than the aggregate notebook.
   const editor = useStudentNoteEditor({ userId, subjectId, chapterId, jobId, topicId });
 
-  // Real-time keyboard offset: only meaningful for the portrait bottom sheet.
+  // Real-time keyboard offset. Both paths write the SAME shared value, which is
+  // consumed only inside useAnimatedStyle below — never read during render.
+  // (Reading `.value` in render does not subscribe the component to changes, so
+  // the offset silently never reached the layout.)
+  //   - EAS builds: react-native-keyboard-controller drives it frame-by-frame.
+  //   - Expo Go (native module absent): JS Keyboard events drive it, animated
+  //     with withTiming so the sheet still rises smoothly rather than snapping.
   const keyboardControlled = variant === 'portrait' && isKeyboardControlled;
   const keyboardOffset = useKeyboardDrivenOffset(keyboardControlled);
-  const sheetAnimatedStyle = useAnimatedStyle(() => ({
-    paddingBottom: keyboardOffset.value,
-  }));
+
+  useEffect(() => {
+    if (keyboardControlled) return;
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => {
+        keyboardOffset.value = withTiming(Math.max(e.endCoordinates?.height ?? 0, 0), {
+          duration: Platform.OS === 'ios' ? Math.max(e.duration ?? 250, 120) : 220,
+        });
+      },
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      (e: any) => {
+        keyboardOffset.value = withTiming(0, {
+          duration: Platform.OS === 'ios' ? Math.max(e?.duration ?? 200, 120) : 180,
+        });
+      },
+    );
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, [keyboardControlled, keyboardOffset]);
+
+  // Android fires keyboardDidShow only once the keyboard has finished animating
+  // in, and with edge-to-edge the first event can report a stale height — which
+  // left the sheet stranded behind the keyboard until a keystroke triggered a
+  // second event. Seeding from Keyboard.metrics() on focus closes that gap.
+  const handleInputFocus = useCallback(() => {
+    if (keyboardControlled) return;
+    const height = Keyboard.metrics?.()?.height ?? 0;
+    if (height > 0) {
+      keyboardOffset.value = withTiming(height, { duration: 180 });
+    }
+  }, [keyboardControlled, keyboardOffset]);
+
+  // Animated slide-up for the bottom sheet (Reanimated shared values, not Animated.Value)
+  const slideY = useSharedValue(1);
+  const screenH = Dimensions.get('window').height;
+
+  useEffect(() => {
+    slideY.value = withSpring(1, { damping: 15, stiffness: 150 });
+  }, []);
+
+  // The sheet is bottom-anchored, so instead of padding its bottom (which the
+  // 85% max-height cap could swallow, leaving content behind the keyboard) we
+  // move its bottom edge to sit exactly on top of the keyboard and re-cap the
+  // height against the space that actually remains above it.
+  const sheetAnimatedStyle = useAnimatedStyle(() => {
+    const kb = Math.max(keyboardOffset.value, 0);
+    const available = Math.max(screenH - kb, 240);
+    return {
+      transform: [{ translateY: slideY.value === 1 ? 0 : screenH }],
+      bottom: kb,
+      maxHeight: available * BOTTOM_SHEET_MAX_RATIO,
+      // Safe-area padding is only meaningful when the keyboard is down — while
+      // it is up the system bars sit behind it.
+      paddingBottom: kb > 0 ? 10 : Math.max(insets.bottom, 10),
+    };
+  });
 
   const stat = statusLabel(editor.status, editor.hasPendingCloudSave);
   const showRetry = editor.status === 'error' || editor.status === 'local';
@@ -194,36 +261,66 @@ function NotesEditor({
     />
   );
 
+  const inputPortrait = (
+    <TextInput
+      style={styles.input}
+      value={editor.content}
+      onChangeText={editor.setContent}
+      editable={!editor.isLoading}
+      multiline
+      textAlignVertical="top"
+      spellCheck
+      autoCorrect
+      autoCapitalize="sentences"
+      keyboardAppearance="dark"
+      scrollEnabled
+      placeholder="Jot down what you're learning…"
+      placeholderTextColor={C.faint}
+    />
+  );
+
   if (variant === 'side') {
     return (
-      <View
+      <KeyboardAvoidingView
         style={[
           styles.sidePanel,
           { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 8, paddingRight: insets.right },
         ]}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
       >
         {header}
-        {input}
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior="position">
+          {input}
+        </KeyboardAvoidingView>
         {footer}
-      </View>
+      </KeyboardAvoidingView>
     );
   }
 
-  // Portrait bottom sheet — animated padding keeps the editor above the keyboard
-  // on devices where native resize is ignored.
+  // Portrait bottom sheet — sits on top of the keyboard, never behind it.
+  // No KeyboardAvoidingView here: sheetAnimatedStyle already positions the sheet
+  // against the keyboard, and a KAV with iOS 'padding' behavior on top of that
+  // would shift it a second time.
   return (
-    <Reanimated.View
-      style={[
-        styles.bottomSheet,
-        { paddingBottom: insets.bottom },
-        keyboardControlled ? sheetAnimatedStyle : null,
-      ]}
-    >
-      <View style={styles.grabber} />
-      {header}
-      {input}
-      {footer}
-    </Reanimated.View>
+    <View style={{ ...StyleSheet.absoluteFillObject, zIndex: 200 }} pointerEvents="box-none">
+      <Reanimated.View style={[styles.bottomSheet, sheetAnimatedStyle]}>
+        <View style={styles.grabber} />
+        {header}
+        <TextInput
+          style={styles.input}
+          value={editor.content}
+          onChangeText={editor.setContent}
+          onFocus={handleInputFocus}
+          editable={!editor.isLoading}
+          multiline
+          textAlignVertical="top"
+          placeholder="Start writing your notes..."
+          placeholderTextColor={C.faint}
+        />
+        {footer}
+      </Reanimated.View>
+    </View>
   );
 }
 
@@ -351,15 +448,16 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    maxHeight: '80%',
-    minHeight: '45%',
+    flex: 1,
+    maxHeight: '85%',
     backgroundColor: C.bg,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     borderTopWidth: 1,
     borderColor: 'rgba(246,196,78,0.14)',
     paddingHorizontal: 16,
     paddingTop: 8,
+    flexDirection: 'column',
   },
   grabber: {
     alignSelf: 'center',
@@ -369,14 +467,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.18)',
     marginBottom: 8,
   },
-  // Landscape / fullscreen side panel
+  // Landscape / fullscreen side panel — wide enough so keyboard (at bottom)
+  // doesn't obscure the text input. Panel doesn't extend to the very bottom.
   sidePanel: {
     position: 'absolute',
     top: 0,
     bottom: 0,
     right: 0,
-    width: 340,
-    maxWidth: '55%',
+    width: '50%',
+    maxWidth: '60%',
+    minWidth: 340,
     backgroundColor: C.bg,
     borderLeftWidth: 1,
     borderColor: 'rgba(246,196,78,0.14)',
@@ -417,8 +517,8 @@ const styles = StyleSheet.create({
     flex: 1,
     marginTop: 12,
     marginBottom: 8,
-    padding: 12,
-    minHeight: 120,
+    padding: 14,
+    minHeight: 80,
     backgroundColor: C.surface,
     borderRadius: 12,
     borderWidth: 1,
@@ -427,6 +527,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     fontFamily: 'Sora_400Regular',
+    maxHeight: 400,
   },
   footer: {
     flexDirection: 'row',

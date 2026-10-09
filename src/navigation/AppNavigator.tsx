@@ -14,7 +14,6 @@ import LoginScreen from '../screens/LoginScreen';
 import SignupScreen from '../screens/SignupScreen';
 import HomeScreen from '../screens/HomeScreen';
 import DashboardScreen from '../screens/DashboardScreen';
-import CoursesScreen from '../screens/CoursesScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import MyCoursesScreen from '../screens/MyCoursesScreen';
 import CourseDetailsScreen from '../screens/CourseDetailsScreen';
@@ -50,6 +49,7 @@ import BlogDetailScreen from '../screens/BlogDetailScreen';
 import V3PlayerScreen from '../screens/V3PlayerScreen';
 import V4PlayerScreen from '../screens/V4PlayerScreen';
 import MarketingLecturePlayerScreen from '../screens/MarketingLecturePlayerScreen';
+import V5PlayerScreen from '../screens/V5PlayerScreen';
 import MyRewardsScreen from '../screens/MyRewardsScreen';
 import CoursePreviewScreen from '../screens/CoursePreviewScreen';
 import StudyTimetableScreen from '../screens/StudyTimetableScreen';
@@ -66,7 +66,6 @@ export type MainTabParamList = {
   Home: undefined;
   Reels: undefined;
   Profile: undefined;
-  Courses: { searchQuery?: string } | undefined;
   MyNotes: undefined;
 };
 
@@ -137,7 +136,23 @@ export type RootStackParamList = {
     courseId?: string;
     topicTitle?: string;
   };
+  /**
+   * @deprecated Superseded by V5Player. The screen is still registered and
+   * fully working — it is simply no longer navigated to. Keep both until V5
+   * has been through a release.
+   */
   MarketingLecturePlayer: {
+    jobId: string;
+    title: string;
+    subtitle?: string;
+    topicId?: string;
+    chapterId?: string;
+    subjectId?: string;
+    courseId?: string;
+    initialLanguage?: string;
+  };
+  /** Same params as MarketingLecturePlayer — V5 is a drop-in replacement. */
+  V5Player: {
     jobId: string;
     title: string;
     subtitle?: string;
@@ -187,7 +202,6 @@ function TabNavigator({ route }: { route: RouteProp<RootStackParamList, 'MainTab
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Reels" component={ReelsScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
-      <Tab.Screen name="Courses" component={CoursesScreen} />
       <Tab.Screen name="MyNotes" component={MyNotesCoursesScreen} />
     </Tab.Navigator>
   );
@@ -261,6 +275,7 @@ export default function AppNavigator() {
         <Stack.Screen name="V3Player" component={V3PlayerScreen} />
         <Stack.Screen name="V4Player" component={V4PlayerScreen} />
         <Stack.Screen name="MarketingLecturePlayer" component={MarketingLecturePlayerScreen} />
+        <Stack.Screen name="V5Player" component={V5PlayerScreen} />
         <Stack.Screen name="MyRewards" component={MyRewardsScreen} />
         <Stack.Screen name="CoursePreview" component={CoursePreviewScreen} />
         <Stack.Screen name="StudyTimetable" component={StudyTimetableScreen} />
