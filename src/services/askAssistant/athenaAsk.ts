@@ -5,11 +5,12 @@
 // matching web's own un-authenticated fetch).
 //
 // Web parses the stream manually via fetch's readable body
-// (`response.body.getReader()`), which React Native's `fetch` doesn't
-// support uniformly across platforms. This uses `react-native-sse`'s
-// EventSource instead, which gets the same incremental, named-event
-// delivery over XHR progressive reads.
-import EventSource from 'react-native-sse';
+// (`response.body.getReader()`). React Native's built-in `fetch` has no
+// streaming body, so this uses `expo/fetch` (Expo SDK 54's WinterCG fetch),
+// whose Response exposes a real ReadableStream — letting this file run the
+// web client's exact read-and-parse loop. See askAthenaQuestion for why the
+// previous react-native-sse/XHR transport had to go.
+import { fetch as expoFetch } from 'expo/fetch';
 import { SUPABASE_DIRECT_URL } from '../supabase';
 import { askLog, askWarn, preview } from './askLog';
 
@@ -74,22 +75,27 @@ export interface AskAthenaParams {
   topicId?: string;
 }
 
+/** Log a warning if the stream has produced nothing by these marks. */
+const STALL_WARN_AFTER_MS = [10_000, 30_000, 60_000];
+
 export interface AskAthenaHandle {
   /** Close the connection early (e.g. the student closed the assistant). */
   close: () => void;
 }
-
-type AthenaSSEEventName = 'thinking' | 'meta' | 'segment' | 'done' | 'out_of_scope' | 'error';
-
-/** react-native-sse's own connection-level events, useful for telling "never
- * connected" apart from "connected but no frames parsed". */
-type SSELifecycleEvent = 'open' | 'close';
 
 /**
  * Streams /ask, calling `onEvent` for each SSE message as it arrives, and
  * `onEnd` once the stream closes (after `done`/`out_of_scope`, a connection
  * error, or an explicit `close()`). Mirrors the web function's event
  * semantics; callers read final state from the events they received.
+ *
+ * Transport: `expo/fetch`, whose Response exposes a real ReadableStream, so
+ * this runs the web client's exact read-and-parse loop. It replaced
+ * react-native-sse, which is built on XMLHttpRequest: on this build the XHR
+ * never fired a single readystatechange for this request (the library's own
+ * debug output showed only "Will open new connection in 500 ms", then silence
+ * for 93s while the identical request from a desktop returned headers
+ * instantly), so every question was lost before Athena sent a byte.
  */
 export function askAthenaQuestion(
   params: AskAthenaParams,
@@ -106,127 +112,147 @@ export function askAthenaQuestion(
   askLog('sse', `POST /ask subject=${params.subjectId} topic=${params.topicId ?? '-'}`);
   askLog('sse', `question: ${preview(params.question)}`);
 
-  const es = new EventSource<AthenaSSEEventName | SSELifecycleEvent>(proxyUrl('/ask'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
-    // Athena/the proxy send CRLF line endings, not bare LF (same quirk the
-    // web client works around by normalizing before parsing). Verified again
-    // 2026-10-09 by hexdumping the proxy's response: frames end `\r\n\r\n`.
-    lineEndingCharacter: '\r\n',
-    pollingInterval: 0,
-  });
-
+  const controller = new AbortController();
   let ended = false;
   let eventCount = 0;
   const seen: Record<string, number> = {};
 
-  const finish = () => {
+  const watchdogs = STALL_WARN_AFTER_MS.map((ms) =>
+    setTimeout(() => {
+      if (ended || eventCount > 0) return;
+      askWarn('sse', `STALLED: ${ms / 1000}s with no response at all`);
+    }, ms),
+  );
+
+  const finish = (reason: string) => {
     if (ended) return;
     ended = true;
-    askLog('sse', `closing after ${eventCount} event(s)`, seen);
-    es.removeAllEventListeners();
-    es.close();
+    watchdogs.forEach(clearTimeout);
+    askLog('sse', `closing after ${eventCount} event(s) — ${reason}`, seen);
+    controller.abort();
     onEnd();
   };
 
-  /** Logs every frame before handing it on, so a stream that connects but
-   * never produces a `done` shows exactly what it did produce. */
-  const trace = (name: string, raw?: string | null) => {
+  const dispatch = (name: string, rawData: string) => {
     eventCount += 1;
     seen[name] = (seen[name] ?? 0) + 1;
-    askLog('sse', `<- ${name}${raw ? ` ${preview(raw)}` : ''}`);
-  };
 
-  es.addEventListener('open', () => askLog('sse', 'connection open'));
-  es.addEventListener('close', () => askLog('sse', 'connection closed by server'));
-
-  const parse = (raw: string | null | undefined): any => {
-    if (!raw) return null;
+    let data: any;
     try {
-      return JSON.parse(raw);
+      data = rawData ? JSON.parse(rawData) : {};
     } catch {
-      return null;
+      askWarn('sse', `<- ${name} payload did not parse — dropped: ${preview(rawData)}`);
+      return;
+    }
+
+    switch (name) {
+      case 'thinking':
+        askLog('sse', `<- thinking ${preview(data.status ?? '', 60)}`);
+        onEvent({ type: 'thinking' });
+        break;
+      case 'meta':
+        askLog(
+          'sse',
+          `<- meta answer_id=${data.answer_id} hf_enabled=${!!data.hf_enabled} cached=${!!data.cached}`,
+        );
+        onEvent({
+          type: 'meta',
+          meta: {
+            answer_id: data.answer_id,
+            hf_enabled: !!data.hf_enabled,
+            cached: !!data.cached,
+            sources: Array.isArray(data.sources) ? data.sources : [],
+          },
+        });
+        break;
+      case 'segment':
+        askLog('sse', `<- segment i=${data.i} type=${data.type ?? '-'} ${preview(data.title ?? '', 40)}`);
+        onEvent({ type: 'segment', segment: data as AthenaSegment });
+        break;
+      case 'done':
+        askLog('sse', `<- done answer_id=${data.answer_id ?? 'MISSING'}`);
+        if (!data.answer_id) askWarn('sse', 'done carried no answer_id — the hook falls back to meta');
+        onEvent({
+          type: 'done',
+          answerId: data.answer_id,
+          sources: Array.isArray(data.source_documents) ? data.source_documents : [],
+        });
+        finish('done');
+        break;
+      case 'out_of_scope':
+        askLog('sse', `<- out_of_scope ${preview(data.message ?? '', 80)}`);
+        onEvent({ type: 'out_of_scope', message: data.message });
+        finish('out_of_scope');
+        break;
+      case 'error':
+        askWarn('sse', `<- error ${preview(data.message || data.error || '', 80)}`);
+        onEvent({ type: 'error', message: data.message || data.error || 'Unknown error' });
+        finish('server error');
+        break;
+      default:
+        askWarn('sse', `<- unknown event "${name}" ignored`);
     }
   };
 
-  es.addEventListener('thinking', (ev) => {
-    trace('thinking', (ev as { data?: string | null }).data);
-    onEvent({ type: 'thinking' });
-  });
+  void (async () => {
+    try {
+      const res = await expoFetch(proxyUrl('/ask'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: controller.signal,
+      });
 
-  es.addEventListener('meta', (ev) => {
-    trace('meta', ev.data);
-    const data = parse(ev.data);
-    if (!data) {
-      askWarn('sse', 'meta payload did not parse — answer_id unknown');
-      return;
+      askLog('sse', `response ${res.status} ${res.headers.get('content-type') ?? ''}`);
+
+      if (!res.ok || !res.body) {
+        const text = await res.text().catch(() => '');
+        askWarn('sse', `request failed (${res.status}): ${preview(text)}`);
+        onEvent({ type: 'error', message: text || `Request failed (${res.status})` });
+        finish(`HTTP ${res.status}`);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      // SSE frames are separated by a blank line; each frame carries an
+      // "event:" and one or more "data:" lines (":" comment lines — keep-alive
+      // pings — are ignored). Normalizing CRLF on the whole buffer, exactly as
+      // the web client does, keeps this agnostic to the server's line endings
+      // even when a CRLF straddles two chunks.
+      while (!ended) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+
+        let sep: number;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+
+          let name = 'message';
+          const dataLines: string[] = [];
+          for (const rawLine of frame.split('\n')) {
+            if (rawLine.startsWith(':')) continue;
+            if (rawLine.startsWith('event:')) name = rawLine.slice(6).trim();
+            else if (rawLine.startsWith('data:')) dataLines.push(rawLine.slice(5).trim());
+          }
+          if (dataLines.length) dispatch(name, dataLines.join('\n'));
+        }
+      }
+
+      finish('stream ended');
+    } catch (err) {
+      if (ended) return; // our own abort from finish()
+      askWarn('sse', `transport error: ${String(err)}`);
+      onEvent({ type: 'error', message: 'Connection error' });
+      finish('transport error');
     }
-    askLog(
-      'sse',
-      `meta answer_id=${data.answer_id} hf_enabled=${!!data.hf_enabled} cached=${!!data.cached}`,
-    );
-    onEvent({
-      type: 'meta',
-      meta: {
-        answer_id: data.answer_id,
-        hf_enabled: !!data.hf_enabled,
-        cached: !!data.cached,
-        sources: Array.isArray(data.sources) ? data.sources : [],
-      },
-    });
-  });
+  })();
 
-  es.addEventListener('segment', (ev) => {
-    const data = parse(ev.data);
-    if (!data) {
-      trace('segment');
-      askWarn('sse', 'segment payload did not parse — dropped');
-      return;
-    }
-    trace('segment');
-    askLog('sse', `segment i=${data.i} type=${data.type ?? '-'} title=${preview(data.title ?? '', 40)}`);
-    onEvent({ type: 'segment', segment: data as AthenaSegment });
-  });
-
-  es.addEventListener('done', (ev) => {
-    trace('done', ev.data);
-    const data = parse(ev.data);
-    if (!data?.answer_id) {
-      askWarn('sse', 'done event carried no answer_id — the hook will fall back to meta');
-    }
-    onEvent({
-      type: 'done',
-      answerId: data?.answer_id,
-      sources: Array.isArray(data?.source_documents) ? data.source_documents : [],
-    });
-    finish();
-  });
-
-  es.addEventListener('out_of_scope', (ev) => {
-    trace('out_of_scope', ev.data);
-    const data = parse(ev.data);
-    onEvent({ type: 'out_of_scope', message: data?.message });
-    finish();
-  });
-
-  es.addEventListener('error', (ev) => {
-    // This library fires its own connection-level "error" events on the same
-    // name as Athena's content-level "error" SSE event — disambiguate by
-    // whether there's a parseable payload.
-    const raw = ev as { data?: string | null; message?: string; xhrStatus?: number; xhrState?: number };
-    const data = parse(raw.data);
-    const message = data?.message || data?.error || 'Connection error';
-    trace('error', raw.data);
-    askWarn(
-      'sse',
-      `error: ${message} (transport message=${raw.message ?? '-'} xhrStatus=${raw.xhrStatus ?? '-'} xhrState=${raw.xhrState ?? '-'})`,
-    );
-    onEvent({ type: 'error', message });
-    finish();
-  });
-
-  return { close: finish };
+  return { close: () => finish('closed by caller') };
 }
 
 export interface HyperframeVideoStatus {
