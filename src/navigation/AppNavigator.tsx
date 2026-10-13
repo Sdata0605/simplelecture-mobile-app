@@ -59,6 +59,8 @@ import MyTestResultScreen from '../screens/MyTestResultScreen';
 import MyNotesCoursesScreen from '../screens/MyNotesCoursesScreen';
 import MyNotesSubjectsScreen from '../screens/MyNotesSubjectsScreen';
 import MyNotesChapterScreen from '../screens/MyNotesChapterScreen';
+import AITeacherScreen from '../screens/AITeacherScreen';
+import AITeacherSettingsScreen from '../screens/AITeacherSettingsScreen';
 
 export type MainTabParamList = {
   MyCourses: undefined;
@@ -179,6 +181,8 @@ export type RootStackParamList = {
   MyTestResult: { testId: string };
   MyNotesSubjects: { courseId: string; courseName?: string };
   MyNotesChapter: { courseId: string; courseName?: string; subjectId: string; subjectName?: string; initialChapterId?: string };
+  AITeacher: { initialSubject?: string } | undefined;
+  AITeacherSettings: undefined;
 };
 
 export const navigationRef = createRef<NavigationContainerRef<RootStackParamList>>();
@@ -284,6 +288,8 @@ export default function AppNavigator() {
         <Stack.Screen name="MyTestResult" component={MyTestResultScreen} />
         <Stack.Screen name="MyNotesSubjects" component={MyNotesSubjectsScreen} />
         <Stack.Screen name="MyNotesChapter" component={MyNotesChapterScreen} />
+        <Stack.Screen name="AITeacher" component={AITeacherScreen} />
+        <Stack.Screen name="AITeacherSettings" component={AITeacherSettingsScreen} />
       </Stack.Navigator>
       <AppSidebar />
       </SidebarProvider>

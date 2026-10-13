@@ -9,6 +9,10 @@ import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 const NAV_HEIGHT = 50;
 const FAB_SIZE = 60;
 const FAB_PROTRUDE = 28;
+const MIN_BOTTOM_INSET = 6;
+
+/** Distance from the bottom of the screen to the top edge of the green bar, for things that float just above it. */
+export const tabBarTop = (safeAreaBottom: number) => Math.max(safeAreaBottom, MIN_BOTTOM_INSET) + NAV_HEIGHT;
 
 interface BarButtonProps {
   isFocused: boolean;
@@ -59,8 +63,12 @@ function BarButton({ isFocused, iconName, onPress, onLongPress, size = 24 }: Bar
 
 export default function CustomTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
-  const wrapperHeight = NAV_HEIGHT + FAB_PROTRUDE + Math.max(insets.bottom, 6);
-  const gradientHeight = NAV_HEIGHT + Math.max(insets.bottom, 6);
+  // The colored bar itself stays a fixed, compact height — only its position lifts by
+  // the device's safe-area inset (home indicator / gesture bar), as plain transparent
+  // space below it. Previously the inset was added to the gradient's own height, so on
+  // devices with a tall inset the green bar visibly stretched into a massive block.
+  const bottomInset = Math.max(insets.bottom, MIN_BOTTOM_INSET);
+  const wrapperHeight = NAV_HEIGHT + FAB_PROTRUDE + bottomInset;
 
   const currentName = state.routes[state.index]?.name;
 
@@ -79,11 +87,16 @@ export default function CustomTabBar({ state, navigation }: BottomTabBarProps) {
 
   return (
     <View style={[styles.wrapper, { height: wrapperHeight }]}>
+      {/* Opaque backing for the safe-area strip below the pill — without it, screen
+          content scrolling underneath this absolutely-positioned bar showed through
+          the transparent gap left by the compact (non-stretched) gradient above. */}
+      <View style={[styles.safeAreaBacking, { height: bottomInset }]} />
+
       <LinearGradient
         colors={[colors.primary, '#4ADE80', '#22C55E']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 0 }}
-        style={[styles.gradient, { height: gradientHeight }]}
+        style={[styles.gradient, { height: NAV_HEIGHT, bottom: bottomInset }]}
       >
         <View style={styles.tabsRow}>
           <View style={styles.tabsSide}>
@@ -111,10 +124,10 @@ export default function CustomTabBar({ state, navigation }: BottomTabBarProps) {
               onPress={() => navigateTab('MyNotes')}
             />
             <BarButton
-              isFocused={currentName === 'Reels'}
-              iconName={currentName === 'Reels' ? 'play-circle' : 'play-circle-outline'}
-              size={24}
-              onPress={() => navigateTab('Reels')}
+              isFocused={currentName === 'AITeacher'}
+              iconName={currentName === 'AITeacher' ? 'school' : 'school-outline'}
+              size={22}
+              onPress={() => navigation.navigate('AITeacher' as any)}
             />
           </View>
         </View>
@@ -143,6 +156,13 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     overflow: 'visible',
+  },
+  safeAreaBacking: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: colors.white,
   },
   gradient: {
     position: 'absolute',

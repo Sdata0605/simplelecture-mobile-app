@@ -209,7 +209,15 @@ export default function ChaptersListScreen() {
             )}
           </View>
         </View>
-        <View style={{ width: 36 }} />
+        <TouchableOpacity
+          style={styles.aiTeacherBtn}
+          onPress={() => navigation.navigate('AITeacher', { initialSubject: subjectName })}
+          data-testid="button-subject-aiteacher"
+          activeOpacity={0.85}
+        >
+          <Ionicons name="school" size={13} color={colors.primary} />
+          <Text style={styles.aiTeacherBtnText}>AI Teacher</Text>
+        </TouchableOpacity>
       </LinearGradient>
 
       <ScrollView
@@ -217,6 +225,35 @@ export default function ChaptersListScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
+        <TouchableOpacity
+          style={styles.aiTeacherCard}
+          activeOpacity={0.88}
+          onPress={() => navigation.navigate('AITeacher', { initialSubject: subjectName })}
+          data-testid="card-subject-aiteacher"
+        >
+          <LinearGradient
+            colors={['#0F766E', '#059669']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.aiTeacherCardGradient}
+          >
+            <View style={styles.aiTeacherCardIcon}>
+              <Ionicons name="school" size={20} color="#FFFFFF" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={styles.aiTeacherCardTitle}>Ask {subjectName} AI Teacher</Text>
+                <View style={styles.aiTeacherCardBadge}>
+                  <Text style={styles.aiTeacherCardBadgeText}>24/7 TUTOR</Text>
+                </View>
+              </View>
+              <Text style={styles.aiTeacherCardSubtitle} numberOfLines={1}>
+                Voice & chat doubt solver mapped to your syllabus
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#FFFFFF" />
+          </LinearGradient>
+        </TouchableOpacity>
         {chapters.length === 0 ? (
           <View style={styles.emptyState}>
             <View style={styles.emptyIcon}>
@@ -637,5 +674,70 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.primary,
     letterSpacing: 0.5,
+  },
+  aiTeacherBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  aiTeacherBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  aiTeacherCard: {
+    marginBottom: spacing.md,
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#0F766E',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  aiTeacherCardGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.md,
+    gap: spacing.md,
+  },
+  aiTeacherCardIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiTeacherCardTitle: {
+    fontSize: fontSize.sm + 1,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  aiTeacherCardBadge: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 6,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  aiTeacherCardBadgeText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  aiTeacherCardSubtitle: {
+    fontSize: fontSize.xs,
+    color: 'rgba(255,255,255,0.85)',
+    marginTop: 2,
   },
 });

@@ -25,6 +25,11 @@ import { useSidebar } from '../context/SidebarContext';
 import HeaderMenuButton from '../components/HeaderMenuButton';
 import HomeHeroBanner from '../components/HomeHeroBanner';
 import HeroVideoBanner from '../components/HeroVideoBanner';
+import AITeacherShowcase from '../components/aiteacher/AITeacherShowcase';
+import AITeacherFab from '../components/aiteacher/AITeacherFab';
+import { AITeacherPlanModal } from '../components/aiteacher/AITeacherPlanModal';
+import { useAITeacherSubscription } from '../services/aiTeacherSubscription';
+import { aiTeacherDestination } from '../services/aiTeacherPromo';
 import { useCourseFreePreviewLimits } from '../hooks/useCourseFreeAccess';
 
 const SSLC_COURSE_ID = '4c10bc8e-acbc-4b76-b7f5-54376c030cb0';
@@ -39,6 +44,8 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { user, refreshUser } = useAuth();
   const { openSidebar } = useSidebar();
+  const { hasActivePlan, plans } = useAITeacherSubscription();
+  const [plansOpen, setPlansOpen] = useState(false);
   const { aiLimit: sslcAiLimit, doubtsLimit: sslcDoubtsLimit } = useCourseFreePreviewLimits(SSLC_COURSE_ID);
 
   const [featuredMyCourses, setFeaturedMyCourses] = useState<ExploreCourse[]>([]);
@@ -50,6 +57,12 @@ export default function HomeScreen() {
   const [loadingBest, setLoadingBest] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [notifUnreadCount, setNotifUnreadCount] = useState(0);
+
+  // The floating AI button and the promo card both lead to the AI Teacher: straight in with a plan, otherwise to the plans.
+  const openAITeacher = useCallback(() => {
+    if (aiTeacherDestination(hasActivePlan) === 'teacher') navigation.navigate('AITeacher');
+    else setPlansOpen(true);
+  }, [hasActivePlan, navigation]);
 
   const loadHomeData = useCallback(async () => {
     setLoadingFeatured(true);
@@ -193,13 +206,11 @@ export default function HomeScreen() {
               </View>
               <View style={styles.headerActions}>
                 <TouchableOpacity
-                  style={styles.searchIconButton}
+                  style={styles.iconButton}
                   onPress={() => navigation.navigate('MainTabs', { screen: 'MyCourses' })}
                   data-testid="button-search-courses"
                 >
-                  <View style={styles.searchIconInner}>
-                    <Ionicons name="search" size={20} color={colors.primary} />
-                  </View>
+                  <Ionicons name="search" size={20} color={colors.white} />
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -207,7 +218,7 @@ export default function HomeScreen() {
                   onPress={() => navigation.navigate('Notifications')}
                   data-testid="button-notifications"
                 >
-                  <Ionicons name="notifications-outline" size={22} color={colors.white} />
+                  <Ionicons name="notifications-outline" size={20} color={colors.white} />
                   {notifUnreadCount > 0 && (
                     <View style={styles.notifBadge}>
                       <Text style={styles.notifBadgeText}>
@@ -248,6 +259,8 @@ export default function HomeScreen() {
             />
 
             <HeroVideoBanner />
+
+            {!hasActivePlan && <AITeacherShowcase price={plans.byok_500.price} onPress={openAITeacher} />}
 
             {enrolledMyCourses.length > 0 && (
               <View style={styles.section}>
@@ -598,6 +611,9 @@ export default function HomeScreen() {
           </ScrollView>
         </View>
       </View>
+
+      <AITeacherFab hasActivePlan={hasActivePlan} onPress={openAITeacher} />
+      <AITeacherPlanModal visible={plansOpen} onClose={() => setPlansOpen(false)} />
     </View>
   );
 }
@@ -751,24 +767,13 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   iconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: 'rgba(255,255,255,0.2)',
-    padding: 10,
-    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
     position: 'relative',
-  },
-  searchIconButton: {
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  searchIconInner: {
-    backgroundColor: colors.white,
-    padding: 10,
-    borderRadius: 14,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 4,
   },
   notifBadge: {
     position: 'absolute',

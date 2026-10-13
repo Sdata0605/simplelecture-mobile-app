@@ -21,7 +21,9 @@ import KeepScreenAwake from '../components/KeepScreenAwake';
 import V5KeyPointsOverlay from '../components/v5/V5KeyPointsOverlay';
 import V5SectionProgress from '../components/v5/V5SectionProgress';
 import { AskAIAssistant } from '../components/askAssistant/AskAIAssistant';
-import { useAthenaLink, type AthenaLink } from '../hooks/useAthenaLink';
+import { useTeacherSubject } from '../hooks/useTeacherSubject';
+import { buildAskContext } from '../services/askAssistant/lectureContext';
+import type { LectureAskContext } from '../services/askAssistant/lectureLesson';
 import { seekMillisFromPress } from '../utils/marketingVideoControls';
 import {
   fetchV5Presentation,
@@ -82,18 +84,14 @@ export default function V5PlayerScreen() {
   const hasTopicContext = !!topicId;
   const canTakeNotes = !!topicId && !!chapterId && !!subjectId;
 
-  // Hands-free "Ask AI" voice assistant — only available once an admin has
-  // linked this subject to Athena (mirrors the web V5 player's Sparkles
-  // button, which is gated the same way).
-  const { data: athenaLink } = useAthenaLink(subjectId, topicId);
+  // "Ask AI": the student talks to the live AI Teacher, which can teach any subject whose lectures are indexed.
+  // Until the list loads, or if it fails, the player simply has no Ask AI button.
+  const teacherSubject = useTeacherSubject(subjectId);
   const [askAIOpen, setAskAIOpen] = useState(false);
-  // The Athena link the assistant was opened with, snapshotted on open.
-  // getAthenaLink resolves with athenaSubjectId: null (rather than throwing)
-  // whenever the access token is momentarily unavailable, so re-reading the
-  // live query in the render gate below would unmount an open assistant on a
-  // token hiccup — and its unmount closes the in-flight /ask stream, silently
-  // throwing away the student's question.
-  const [askAILink, setAskAILink] = useState<AthenaLink | null>(null);
+  // Where the lecture was when Ask AI was tapped, so the teacher can answer in context.
+  const [askContext, setAskContext] = useState<LectureAskContext | null>(null);
+  // Ask AI is a landscape screen; remember whether the player was already in landscape (fullscreen) to restore it.
+  const askWasFullscreenRef = useRef(false);
   const resumeAfterAskRef = useRef(false);
 
   const videoRef = useRef<Video>(null);
@@ -328,29 +326,45 @@ export default function V5PlayerScreen() {
     showControls();
   }, [showControls]);
 
-  // Mirrors the web V5 player's handleAskAI: remember whether the video was
-  // playing, pause it, open the assistant — then resume automatically on
-  // close only if it was actually playing before (never auto-resume a video
-  // the student had already paused themselves).
+  // Mirrors the web V5 player's handleAskAI: remember whether the video was playing, pause it, and open the
+  // assistant. Ask AI is a landscape screen (lesson board left, teacher right), so the screen rotates first, and
+  // goes back to how the player was on close. The video resumes only if it was playing before (never auto-resume
+  // a video the student had already paused themselves).
   const handleAskAI = useCallback(() => {
-    if (!athenaLink?.athenaSubjectId) return;
+    if (!teacherSubject) return;
     resumeAfterAskRef.current = isPlaying;
     videoRef.current?.pauseAsync().catch(() => {});
     setIsPlaying(false);
-    setAskAILink(athenaLink);
+    setAskContext(buildAskContext(timeline, position.active, positionMillis / 1000, durationMillis / 1000));
+    askWasFullscreenRef.current = isFullscreen;
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
     setAskAIOpen(true);
     showControls();
-  }, [athenaLink, isPlaying, showControls]);
+  }, [teacherSubject, isPlaying, timeline, position.active, positionMillis, durationMillis, isFullscreen, showControls]);
 
   const handleCloseAskAI = useCallback(() => {
     setAskAIOpen(false);
-    setAskAILink(null);
+    setAskContext(null);
+    // Back to how the player was: portrait, unless it was already in landscape fullscreen.
+    if (!askWasFullscreenRef.current) {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+        .then(() => {
+          setTimeout(() => ScreenOrientation.unlockAsync().catch(() => {}), 300);
+        })
+        .catch(() => {});
+    }
     if (resumeAfterAskRef.current) {
       resumeAfterAskRef.current = false;
       videoRef.current?.playAsync().catch(() => {});
       setIsPlaying(true);
     }
   }, []);
+
+  // No AI Teacher plan: leave the lecture for the plans screen (the player's own back handling restores the orientation).
+  const handleOpenPlans = useCallback(() => {
+    handleCloseAskAI();
+    navigation.navigate('AITeacher');
+  }, [handleCloseAskAI, navigation]);
 
   const cycleSpeed = useCallback(() => {
     setPlaybackRate((rate) => {
@@ -602,7 +616,7 @@ export default function V5PlayerScreen() {
           <Ionicons name={isMuted ? 'volume-mute' : 'volume-high'} size={19} color="#FFFFFF" />
         </TouchableOpacity>
         <View style={styles.controlsSpacer} />
-        {!!athenaLink?.athenaSubjectId && (
+        {!!teacherSubject && (
           <TouchableOpacity
             style={styles.controlButton}
             onPress={handleAskAI}
@@ -781,13 +795,15 @@ export default function V5PlayerScreen() {
         }}
       />
 
-      {askAIOpen && !!askAILink?.athenaSubjectId && (
+      {askAIOpen && !!teacherSubject && (
         <AskAIAssistant
           trigger="mid"
           onClose={handleCloseAskAI}
-          subjectName={askAILink.subjectName ?? undefined}
-          athenaSubjectId={askAILink.athenaSubjectId}
-          athenaTopicId={askAILink.athenaTopicId ?? undefined}
+          subject={teacherSubject}
+          topicTitle={title}
+          lectureLanguage={language}
+          context={askContext}
+          onOpenPlans={handleOpenPlans}
         />
       )}
     </View>

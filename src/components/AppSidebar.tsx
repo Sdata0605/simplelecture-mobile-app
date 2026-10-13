@@ -14,6 +14,7 @@ import { colors, spacing, fontSize, borderRadius } from '../constants/theme';
 import { useAuth } from '../context/AuthContext';
 import { useSidebar } from '../context/SidebarContext';
 import { navigationRef } from '../navigation/AppNavigator';
+import { useAITeacherSubscription } from '../services/aiTeacherSubscription';
 
 const { width } = Dimensions.get('window');
 const PANEL_WIDTH = Math.min(width * 0.78, 320);
@@ -25,6 +26,7 @@ const MENU_ITEMS: MenuItem[] = [
   { icon: 'grid', label: 'Dashboard', route: 'Dashboard' },
   { icon: 'document-text', label: 'My Courses', route: 'MyCourses' },
   { icon: 'create', label: 'My Notes', route: 'MyNotes' },
+  { icon: 'school', label: 'AI Teacher', route: 'AITeacher' },
   { icon: 'compass', label: 'Explore Courses', route: 'Courses' },
   { icon: 'videocam', label: 'Live Classes', route: 'LiveClasses' },
   { icon: 'trophy', label: 'My Rewards', route: 'MyRewards' },
@@ -51,6 +53,7 @@ function navigateTo(route: string) {
 export default function AppSidebar() {
   const { isOpen, closeSidebar } = useSidebar();
   const { user, logout } = useAuth();
+  const { hasActivePlan } = useAITeacherSubscription();
 
   const translateX = useRef(new Animated.Value(-PANEL_WIDTH)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
@@ -157,7 +160,7 @@ export default function AppSidebar() {
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.sidebarMenu}>
-              {MENU_ITEMS.map((item) => {
+              {MENU_ITEMS.filter((item) => item.route !== 'AITeacher' || hasActivePlan).map((item) => {
                 const active = currentRoute === item.route;
                 return (
                   <TouchableOpacity
